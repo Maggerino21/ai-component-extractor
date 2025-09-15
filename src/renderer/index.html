@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Aquaculture AI Extractor</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="app-container">
+        <header class="app-header">
+            <h1>🐟 Aquaculture AI Extractor</h1>
+            <p>AI-powered component extraction for fish farming facilities</p>
+        </header>
+
+        <main class="app-main">
+            <!-- File Upload Section -->
+            <section class="upload-section">
+                <div class="upload-area" id="uploadArea">
+                    <div class="upload-content">
+                        <div class="upload-icon">📁</div>
+                        <h3>Drag & Drop Documents</h3>
+                        <p>Or click to select PDFs and Excel files</p>
+                        <button class="btn-primary" id="selectFilesBtn">Select Files</button>
+                    </div>
+                </div>
+                
+                <div class="file-list" id="fileList" style="display: none;">
+                    <h4>Selected Files:</h4>
+                    <ul id="selectedFiles"></ul>
+                    <button class="btn-success" id="processBtn">🤖 Extract Components</button>
+                </div>
+            </section>
+
+            <!-- Processing Status -->
+            <section class="status-section" id="statusSection" style="display: none;">
+                <div class="status-card">
+                    <h4>🔄 Processing...</h4>
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="progressFill"></div>
+                    </div>
+                    <p id="statusText">Initializing AI extraction...</p>
+                </div>
+            </section>
+
+            <!-- Results Section -->
+            <section class="results-section" id="resultsSection" style="display: none;">
+                <div class="results-header">
+                    <h3>📊 Extraction Results</h3>
+                    <div class="results-actions">
+                        <button class="btn-secondary" id="reviewBtn">Review & Edit</button>
+                        <button class="btn-primary" id="saveToDatabaseBtn">💾 Save to Database</button>
+                        <button class="btn-outline" id="exportBtn">📤 Export CSV</button>
+                    </div>
+                </div>
+                
+                <div class="results-grid" id="resultsGrid">
+                    <!-- Results will be populated here -->
+                </div>
+            </section>
+
+            <!-- Settings Panel -->
+            <section class="settings-section" id="settingsSection" style="display: none;">
+                <div class="settings-card">
+                    <h4>⚙️ Database Configuration</h4>
+                    <form id="dbConfigForm">
+                        <div class="form-group">
+                            <label for="dbServer">SQL Server:</label>
+                            <input type="text" id="dbServer" placeholder="localhost" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="dbName">Database Name:</label>
+                            <input type="text" id="dbName" placeholder="AquacultureDB" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="dbUser">Username:</label>
+                            <input type="text" id="dbUser" placeholder="sa" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="dbPassword">Password:</label>
+                            <input type="password" id="dbPassword" required>
+                        </div>
+                        <button type="submit" class="btn-primary">Test Connection</button>
+                    </form>
+                </div>
+            </section>
+        </main>
+
+        <footer class="app-footer">
+            <button class="btn-ghost" id="settingsBtn">⚙️ Settings</button>
+            <span class="status-indicator" id="dbStatus">Database: Not Connected</span>
+        </footer>
+    </div>
+
+    <script src="renderer.js"></script>
+</body>
+</html>
