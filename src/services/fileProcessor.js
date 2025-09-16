@@ -3,13 +3,16 @@ const path = require('path');
 const pdfParse = require('pdf-parse');
 const XLSX = require('xlsx');
 const Tesseract = require('tesseract.js');
+const AIExtractor = require('./aiExtractor');
+const logger = require('../utils/logger');
 
 class FileProcessor {
     constructor() {
         this.supportedFormats = ['.pdf', '.xlsx', '.xls'];
+        this.aiExtractor = new AIExtractor();
     }
 
-    async processFiles(filePaths) {
+    async processFiles(filePaths, positionMappings = []) {
         const results = [];
         
         for (let i = 0; i < filePaths.length; i++) {
@@ -33,13 +36,20 @@ class FileProcessor {
                     default:
                         throw new Error(`Unsupported file format: ${fileExt}`);
                 }
-                
+
+                const aiResult = await this.aiExtractor.extractComponents({
+                    fileName,
+                    type: fileExt === '.pdf' ? 'pdf' : 'excel',
+                    ...extractedData
+                }, positionMappings);
+
                 results.push({
                     fileName,
                     filePath,
                     fileType: fileExt,
                     success: true,
                     data: extractedData,
+                    aiExtraction: aiResult,
                     processedAt: new Date().toISOString()
                 });
                 
@@ -281,6 +291,8 @@ class FileProcessor {
             excelFiles: results.filter(r => ['.xlsx', '.xls'].includes(r.fileType)).length,
             totalComponents: 0,
             totalMooringLines: 0,
+            aiComponentsFound: 0,
+            aiPositionsFound: 0,
             errors: []
         };
 
@@ -298,6 +310,12 @@ class FileProcessor {
                         summary.totalComponents += sheet.possibleComponents?.length || 0;
                         summary.totalMooringLines += sheet.possibleMooringLines?.length || 0;
                     });
+                }
+
+                if (result.aiExtraction && result.aiExtraction.success) {
+                    const aiData = result.aiExtraction.data;
+                    summary.aiComponentsFound += aiData.extraction_summary?.total_components || 0;
+                    summary.aiPositionsFound += aiData.extraction_summary?.total_positions || 0;
                 }
             } else {
                 summary.errors.push({

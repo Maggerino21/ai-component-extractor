@@ -119,19 +119,345 @@
     margin: 0.5rem 0;
 }
 
-.notification {
-    animation: slideIn 0.3s ease-out;
+.position-mapper {
+    background: white;
+    border-radius: 8px;
+    padding: 2rem;
+    margin-bottom: 2rem;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
 }
 
-@keyframes slideIn {
-    from {
-        transform: translateX(100%);
-        opacity: 0;
-    }
-    to {
-        transform: translateX(0);
-        opacity: 1;
-    }
+.mapper-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 2rem;
+    flex-wrap: wrap;
+    gap: 1rem;
+}
+
+.mapper-header h3 {
+    margin: 0;
+    color: #333;
+}
+
+.mapper-header p {
+    margin: 0.25rem 0 0 0;
+    color: #666;
+    font-size: 0.9rem;
+}
+
+.mapper-controls {
+    display: flex;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+}
+
+.facility-config {
+    background: #f8f9fa;
+    border: 1px solid #e9ecef;
+    border-radius: 6px;
+    padding: 1.5rem;
+    margin-bottom: 2rem;
+}
+
+.facility-config h4 {
+    margin: 0 0 1rem 0;
+    color: #495057;
+}
+
+.config-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+}
+
+.config-item {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.config-item label {
+    font-weight: 500;
+    color: #495057;
+    min-width: 80px;
+}
+
+.config-item input {
+    width: 80px;
+    padding: 0.5rem;
+    border: 1px solid #ced4da;
+    border-radius: 4px;
+    text-align: center;
+}
+
+.mapping-sections {
+    display: flex;
+    flex-direction: column;
+    gap: 2rem;
+}
+
+.mapping-section {
+    border: 1px solid #e9ecef;
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+.mapping-section h4 {
+    background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+    color: white;
+    margin: 0;
+    padding: 1rem;
+    font-size: 1rem;
+    font-weight: 500;
+}
+
+.mapping-grid {
+    padding: 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.mapping-row {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 0.75rem;
+    background: #f8f9fa;
+    border-radius: 4px;
+    border-left: 4px solid #4facfe;
+}
+
+.mapping-info {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    min-width: 200px;
+}
+
+.position-number {
+    background: #4facfe;
+    color: white;
+    padding: 0.25rem 0.75rem;
+    border-radius: 20px;
+    font-weight: 500;
+    font-size: 0.9rem;
+    min-width: 50px;
+    text-align: center;
+}
+
+.position-desc {
+    color: #495057;
+    font-weight: 500;
+}
+
+.mapping-input {
+    flex: 1;
+    max-width: 200px;
+}
+
+.mapping-input input {
+    width: 100%;
+    padding: 0.5rem 0.75rem;
+    border: 2px solid #e9ecef;
+    border-radius: 4px;
+    font-size: 0.9rem;
+    transition: border-color 0.3s ease;
+}
+
+.mapping-input input:focus {
+    outline: none;
+    border-color: #4facfe;
+    box-shadow: 0 0 0 3px rgba(79, 172, 254, 0.1);
+}
+
+.mapping-input input.required {
+    border-color: #dc3545;
+    background: #fff5f5;
+}
+
+.remove-btn {
+    background: #dc3545;
+    color: white;
+    border: none;
+    border-radius: 50%;
+    width: 30px;
+    height: 30px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    font-size: 1.2rem;
+    line-height: 1;
+}
+
+.remove-btn:hover {
+    background: #c82333;
+}
+
+.mapper-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 2rem;
+    padding-top: 2rem;
+    border-top: 1px solid #e9ecef;
+}
+
+.position-mappings-summary {
+    background: #e8f4fd;
+    border: 1px solid #bee5eb;
+    border-radius: 6px;
+    padding: 1rem;
+    margin-bottom: 1.5rem;
+}
+
+.position-mappings-summary h5 {
+    margin: 0 0 0.75rem 0;
+    color: #0c5460;
+}
+
+.mappings-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+.mapping-badge {
+    background: #4facfe;
+    color: white;
+    padding: 0.25rem 0.75rem;
+    border-radius: 20px;
+    font-size: 0.85rem;
+    font-weight: 500;
+}
+
+.app-step {
+    margin-bottom: 2rem;
+}
+
+.position-mapping-section {
+    margin-bottom: 2rem;
+}
+
+.ai-extraction-results {
+    background: #f0f8ff;
+    border: 1px solid #4facfe;
+    border-radius: 6px;
+    padding: 1rem;
+    margin-top: 1rem;
+}
+
+.ai-extraction-results h6 {
+    margin: 0 0 0.75rem 0;
+    color: #2c5aa0;
+}
+
+.ai-summary {
+    display: flex;
+    gap: 1rem;
+    margin-bottom: 1rem;
+    flex-wrap: wrap;
+}
+
+.ai-stat {
+    background: white;
+    padding: 0.25rem 0.75rem;
+    border-radius: 4px;
+    border: 1px solid #dee2e6;
+    font-size: 0.9rem;
+}
+
+.extracted-positions {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.position-preview {
+    background: white;
+    border: 1px solid #dee2e6;
+    border-radius: 4px;
+    padding: 0.75rem;
+}
+
+.position-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.5rem;
+}
+
+.component-count {
+    background: #6c757d;
+    color: white;
+    padding: 0.2rem 0.5rem;
+    border-radius: 12px;
+    font-size: 0.8rem;
+}
+
+.component-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.component-item {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.25rem 0;
+    font-size: 0.9rem;
+}
+
+.component-type {
+    background: #e9ecef;
+    padding: 0.2rem 0.5rem;
+    border-radius: 4px;
+    font-weight: 500;
+    color: #495057;
+}
+
+.component-spec {
+    color: #6c757d;
+    font-size: 0.85rem;
+}
+
+.component-manufacturer {
+    color: #28a745;
+    font-size: 0.85rem;
+    font-weight: 500;
+}
+
+.confidence-badge {
+    color: white;
+    padding: 0.15rem 0.4rem;
+    border-radius: 10px;
+    font-size: 0.75rem;
+    font-weight: 500;
+}
+
+.more-positions {
+    color: #6c757d;
+    font-style: italic;
+    margin-top: 0.5rem;
+    text-align: center;
+}
+
+.ai-extraction-error {
+    background: #fff5f5;
+    border: 1px solid #fed7d7;
+    border-radius: 6px;
+    padding: 1rem;
+    margin-top: 1rem;
+}
+
+.ai-extraction-error h6 {
+    margin: 0 0 0.5rem 0;
+    color: #c53030;
 }* {
     margin: 0;
     padding: 0;
