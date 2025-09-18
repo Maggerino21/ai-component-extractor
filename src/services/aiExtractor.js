@@ -6,6 +6,7 @@ class AIExtractor {
     constructor() {
         this.client = new OpenAI({
             apiKey: process.env.OPENAI_API_KEY,
+            dangerouslyAllowBrowser: true
         });
         this.model = process.env.AI_MODEL || 'gpt-4o-mini';
     }

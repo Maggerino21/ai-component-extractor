@@ -123,9 +123,15 @@ function createMappingContainer() {
 }
 
 function renderPositionMapper() {
-    const container = document.getElementById('position-mapping-container');
-    if (!container) return;
+    console.log('renderPositionMapper called');
     
+    const container = document.getElementById('position-mapping-container');
+    if (!container) {
+        console.log('Container not found, returning');
+        return;
+    }
+    
+    console.log('Setting innerHTML');
     container.innerHTML = `
         <div class="position-mapper">
             <div class="mapper-header">
@@ -133,56 +139,17 @@ function renderPositionMapper() {
                     <h3>Position Mapping Setup</h3>
                     <p>Map document references to internal position numbers</p>
                 </div>
-                
-                <div class="mapper-controls">
-                    <button class="btn-secondary" id="configureBtn">Configure Facility</button>
-                    <button class="btn-outline" id="loadMappingsBtn">Load Saved</button>
-                    <button class="btn-primary" id="saveMappingsBtn">Save Mappings</button>
-                </div>
-            </div>
-
-            <div id="facility-config" class="facility-config" style="display: none;">
-                <h4>Facility Configuration</h4>
-                <div class="config-grid">
-                    <div class="config-item">
-                        <label>Mooring Lines:</label>
-                        <input type="number" id="numMooringLines" min="1" max="20" value="8">
-                    </div>
-                    <div class="config-item">
-                        <label>Buoys:</label>
-                        <input type="number" id="numBuoys" min="1" max="20" value="4">
-                    </div>
-                    <div class="config-item">
-                        <label>Bridles:</label>
-                        <input type="number" id="numBridles" min="0" max="20" value="8">
-                    </div>
-                    <div class="config-item">
-                        <label>Frame Lines:</label>
-                        <input type="number" id="numFrameLines" min="0" max="20" value="4">
-                    </div>
-                </div>
-                <button class="btn-primary" id="applyConfigBtn">Apply Configuration</button>
             </div>
 
             <div id="mapping-sections" class="mapping-sections">
-            </div>
-
-            <div class="mapper-footer">
-                <button class="btn-outline" id="addCustomBtn">Add Custom Position</button>
-                <div class="mapping-stats" id="mappingStats">
-                    0 positions mapped
-                </div>
+                Loading...
             </div>
         </div>
     `;
     
-    document.getElementById('configureBtn').addEventListener('click', toggleFacilityConfig);
-    document.getElementById('applyConfigBtn').addEventListener('click', applyFacilityConfig);
-    document.getElementById('saveMappingsBtn').addEventListener('click', saveMappings);
-    document.getElementById('loadMappingsBtn').addEventListener('click', loadMappings);
-    document.getElementById('addCustomBtn').addEventListener('click', addCustomMapping);
-    
+    console.log('innerHTML set, calling generateMappings');
     generateMappings();
+    console.log('renderPositionMapper completed');
 }
 
 function toggleFacilityConfig() {
