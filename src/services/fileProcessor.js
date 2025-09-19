@@ -73,31 +73,53 @@ class FileProcessor {
         const dataBuffer = fs.readFileSync(filePath);
         
         try {
-            const pdfData = await pdfParse(dataBuffer);
+            // Configure PDF parse without worker - use simple mode
+            const pdfData = await pdfParse(dataBuffer, {
+                normalizeWhitespace: false,
+                disableCombineTextItems: false,
+                // Don't set any worker options to avoid the PDFJS.workerSrc error
+                max: 0  // No limit on pages
+            });
             
             const result = {
                 type: 'pdf',
                 pageCount: pdfData.numpages,
                 text: pdfData.text,
                 extractionMethod: 'text',
-                isEmpty: !pdfData.text || pdfData.text.trim().length === 0
+                isEmpty: !pdfData.text || pdfData.text.trim().length === 0,
+                keywords: this.extractKeywords(pdfData.text)
             };
 
             if (result.isEmpty) {
                 console.log('No text found in PDF, attempting OCR...');
                 result.text = await this.performOCR(dataBuffer);
                 result.extractionMethod = 'ocr';
-                result.isEmpty = !result.text || result.text.trim().length === 0;
+                result.keywords = this.extractKeywords(result.text);
             }
 
-            result.keywords = this.extractKeywords(result.text);
             result.possibleComponents = this.findPossibleComponents(result.text);
-            result.possibleMooringLines = this.findMooringLineReferences(result.text);
+            result.possibleMooringLines = this.findPossibleMooringLines(result.text);
 
             return result;
-
         } catch (error) {
-            throw new Error(`PDF processing failed: ${error.message}`);
+            console.error('PDF parsing error:', error);
+            // If PDF parsing fails completely, try OCR as fallback
+            try {
+                console.log('PDF text extraction failed, trying OCR fallback...');
+                const ocrText = await this.performOCR(dataBuffer);
+                return {
+                    type: 'pdf',
+                    pageCount: 1, // Unknown
+                    text: ocrText,
+                    extractionMethod: 'ocr_fallback',
+                    isEmpty: !ocrText || ocrText.trim().length === 0,
+                    keywords: this.extractKeywords(ocrText),
+                    possibleComponents: this.findPossibleComponents(ocrText),
+                    possibleMooringLines: this.findPossibleMooringLines(ocrText)
+                };
+            } catch (ocrError) {
+                throw new Error(`PDF processing failed: ${error.message}. OCR fallback also failed: ${ocrError.message}`);
+            }
         }
     }
 
@@ -106,118 +128,156 @@ class FileProcessor {
             const workbook = XLSX.readFile(filePath);
             const result = {
                 type: 'excel',
-                sheets: [],
                 sheetNames: workbook.SheetNames,
-                totalSheets: workbook.SheetNames.length
+                sheets: []
             };
 
-            for (const sheetName of workbook.SheetNames) {
+            workbook.SheetNames.forEach(sheetName => {
                 const worksheet = workbook.Sheets[sheetName];
                 const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
                 const objectData = XLSX.utils.sheet_to_json(worksheet);
-
-                const sheetData = {
+                
+                const sheetInfo = {
                     name: sheetName,
+                    rowCount: jsonData.length,
+                    columnCount: jsonData[0] ? jsonData[0].length : 0,
+                    headers: jsonData[0] || [],
                     rawData: jsonData,
                     objectData: objectData,
-                    headers: jsonData[0] || [],
-                    rowCount: jsonData.length,
-                    columnCount: jsonData[0]?.length || 0,
                     possibleComponents: this.findComponentsInSheet(objectData),
                     possibleMooringLines: this.findMooringLinesInSheet(objectData)
                 };
 
-                result.sheets.push(sheetData);
-            }
+                result.sheets.push(sheetInfo);
+            });
 
             return result;
-
         } catch (error) {
             throw new Error(`Excel processing failed: ${error.message}`);
         }
     }
 
-    async performOCR(buffer) {
+    async performOCR(dataBuffer) {
         try {
-            const { data: { text } } = await Tesseract.recognize(buffer, 'eng+nor', {
+            const { data: { text } } = await Tesseract.recognize(dataBuffer, 'nor+eng', {
                 logger: m => console.log(m)
             });
             return text;
         } catch (error) {
-            throw new Error(`OCR failed: ${error.message}`);
+            console.error('OCR failed:', error);
+            return '';
         }
     }
 
     extractKeywords(text) {
+        if (!text) return [];
+        
         const aquacultureKeywords = [
-            'mooring', 'line', 'rope', 'chain', 'shackle', 'anchor', 'buoy',
-            'facility', 'cage', 'net', 'component', 'installation', 'depth',
-            'weight', 'length', 'manufacturer', 'tracking', 'scale aq', 'mørenot',
-            'akva group', 'steinsvik', 'polarcirkel'
+            'anker', 'anchor', 'sjakkel', 'shackle', 'kjetting', 'chain', 
+            'trosse', 'rope', 'bøye', 'buoy', 'spleis', 'splice',
+            'fortøyning', 'mooring', 'line', 'posisjon', 'position',
+            'tonn', 'ton', 'meter', 'kg', 'diameter', 'lengde', 'length'
         ];
-
+        
         const foundKeywords = [];
         const lowerText = text.toLowerCase();
-
+        
         aquacultureKeywords.forEach(keyword => {
-            if (lowerText.includes(keyword.toLowerCase())) {
-                const matches = (lowerText.match(new RegExp(keyword.toLowerCase(), 'g')) || []).length;
-                foundKeywords.push({ keyword, count: matches });
+            const regex = new RegExp(`\\b${keyword}\\b`, 'gi');
+            const matches = lowerText.match(regex);
+            if (matches) {
+                foundKeywords.push({
+                    keyword: keyword,
+                    count: matches.length
+                });
             }
         });
-
-        return foundKeywords.sort((a, b) => b.count - a.count);
+        
+        return foundKeywords;
     }
 
     findPossibleComponents(text) {
+        if (!text) return [];
+        
         const components = [];
         const lines = text.split('\n');
-
-        const componentPatterns = [
-            /(?:rope|chain|shackle|anchor|buoy)[\s\S]*?(?:length|weight|size|diameter)[\s\S]*?(?:\d+)/gi,
-            /(?:scale\s*aq|mørenot|akva)[\s\S]*?(?:rope|chain|shackle)/gi,
-            /(?:tracking|serial|id)[\s\S]*?(?:[a-z]\d+|\d+[a-z])/gi
-        ];
-
-        lines.forEach((line, index) => {
-            componentPatterns.forEach(pattern => {
-                const matches = line.match(pattern);
-                if (matches) {
-                    components.push({
-                        line: index + 1,
-                        text: line.trim(),
-                        matches: matches
-                    });
-                }
-            });
+        
+        lines.forEach((line, lineIndex) => {
+            const lowerLine = line.toLowerCase();
+            
+            // Look for component indicators
+            if (lowerLine.includes('anker') || lowerLine.includes('anchor')) {
+                components.push({
+                    type: 'anchor',
+                    description: line.trim(),
+                    lineNumber: lineIndex + 1,
+                    confidence: 0.8
+                });
+            }
+            
+            if (lowerLine.includes('sjakkel') || lowerLine.includes('shackle')) {
+                components.push({
+                    type: 'shackle',
+                    description: line.trim(),
+                    lineNumber: lineIndex + 1,
+                    confidence: 0.8
+                });
+            }
+            
+            if (lowerLine.includes('kjetting') || lowerLine.includes('chain')) {
+                components.push({
+                    type: 'chain',
+                    description: line.trim(),
+                    lineNumber: lineIndex + 1,
+                    confidence: 0.8
+                });
+            }
+            
+            if (lowerLine.includes('trosse') || lowerLine.includes('rope')) {
+                components.push({
+                    type: 'rope',
+                    description: line.trim(),
+                    lineNumber: lineIndex + 1,
+                    confidence: 0.8
+                });
+            }
+            
+            if (lowerLine.includes('bøye') || lowerLine.includes('buoy')) {
+                components.push({
+                    type: 'buoy',
+                    description: line.trim(),
+                    lineNumber: lineIndex + 1,
+                    confidence: 0.8
+                });
+            }
         });
-
+        
         return components;
     }
 
-    findMooringLineReferences(text) {
+    findPossibleMooringLines(text) {
+        if (!text) return [];
+        
         const mooringLines = [];
-        const lines = text.split('\n');
-
-        const mooringPatterns = [
-            /(?:line|mooring)[\s]*(?:[1-9]\d*[a-z]?|[a-z]\d+)/gi,
-            /(?:position|location)[\s]*(?:[1-9]\d*[a-z]?|[a-z]\d+)/gi,
-            /(?:[1-9]\d*[a-z]?|[a-z]\d+)[\s]*(?:line|mooring)/gi
+        const patterns = [
+            /line\s*(\d+[a-z]?)/gi,
+            /linje\s*(\d+[a-z]?)/gi,
+            /(\d+[a-z]?)\s*line/gi,
+            /posisjon\s*(\d+[a-z]?)/gi,
+            /position\s*(\d+[a-z]?)/gi
         ];
-
-        lines.forEach((line, index) => {
-            mooringPatterns.forEach(pattern => {
-                const matches = line.match(pattern);
-                if (matches) {
-                    mooringLines.push({
-                        line: index + 1,
-                        text: line.trim(),
-                        references: matches
-                    });
-                }
+        
+        patterns.forEach(pattern => {
+            const matches = [...text.matchAll(pattern)];
+            matches.forEach(match => {
+                mooringLines.push({
+                    reference: match[1],
+                    context: match[0],
+                    fullMatch: match.input.substring(Math.max(0, match.index - 50), match.index + 50)
+                });
             });
         });
-
+        
         return mooringLines;
     }
 
@@ -227,16 +287,20 @@ class FileProcessor {
         data.forEach((row, rowIndex) => {
             const rowText = Object.values(row).join(' ').toLowerCase();
             
-            if (rowText.includes('rope') || rowText.includes('chain') || 
-                rowText.includes('shackle') || rowText.includes('anchor')) {
+            if (rowText.includes('anker') || rowText.includes('anchor') ||
+                rowText.includes('sjakkel') || rowText.includes('shackle') ||
+                rowText.includes('kjetting') || rowText.includes('chain') ||
+                rowText.includes('trosse') || rowText.includes('rope') ||
+                rowText.includes('bøye') || rowText.includes('buoy')) {
+                
                 components.push({
-                    row: rowIndex + 1,
+                    rowIndex: rowIndex + 1,
                     data: row,
-                    type: this.identifyComponentType(rowText)
+                    description: rowText
                 });
             }
         });
-
+        
         return components;
     }
 
@@ -246,30 +310,28 @@ class FileProcessor {
         data.forEach((row, rowIndex) => {
             const rowText = Object.values(row).join(' ').toLowerCase();
             
-            if (rowText.includes('line') || rowText.includes('mooring')) {
+            if (rowText.includes('line') || rowText.includes('linje') ||
+                rowText.includes('posisjon') || rowText.includes('position')) {
+                
                 mooringLines.push({
-                    row: rowIndex + 1,
+                    rowIndex: rowIndex + 1,
                     data: row,
-                    lineId: this.extractLineId(rowText)
+                    description: rowText
                 });
             }
         });
-
+        
         return mooringLines;
     }
 
-    identifyComponentType(text) {
-        if (text.includes('rope')) return 'rope';
-        if (text.includes('chain')) return 'chain';
-        if (text.includes('shackle')) return 'shackle';
-        if (text.includes('anchor')) return 'anchor';
-        if (text.includes('buoy')) return 'buoy';
-        return 'unknown';
-    }
-
-    extractLineId(text) {
+    findPossibleReference(text) {
+        if (!text) return null;
+        
         const patterns = [
-            /line[\s]*([1-9]\d*[a-z]?)/i,
+            /([1-9]\d*[a-z]?)\s*(?:line|linje)/i,
+            /(?:line|linje)\s*([1-9]\d*[a-z]?)/i,
+            /position\s*([1-9]\d*[a-z]?)/i,
+            /posisjon\s*([1-9]\d*[a-z]?)/i,
             /([1-9]\d*[a-z]?)[\s]*line/i,
             /position[\s]*([1-9]\d*[a-z]?)/i
         ];
@@ -315,11 +377,11 @@ class FileProcessor {
                 if (result.aiExtraction && result.aiExtraction.success) {
                     const aiData = result.aiExtraction.data;
                     summary.aiComponentsFound += aiData.extraction_summary?.total_components || 0;
-                    summary.aiPositionsFound += aiData.extraction_summary?.total_positions || 0;
+                    summary.aiPositionsFound += aiData.extraction_summary?.total_configurations || 0;
                 }
             } else {
                 summary.errors.push({
-                    fileName: result.fileName,
+                    file: result.fileName,
                     error: result.error
                 });
             }
@@ -331,15 +393,6 @@ class FileProcessor {
     validateFileSupport(filePath) {
         const ext = path.extname(filePath).toLowerCase();
         return this.supportedFormats.includes(ext);
-    }
-
-    async testFileAccess(filePath) {
-        try {
-            await fs.promises.access(filePath, fs.constants.R_OK);
-            return true;
-        } catch {
-            return false;
-        }
     }
 }
 

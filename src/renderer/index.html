@@ -5,93 +5,113 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Aquaculture AI Extractor</title>
     <link rel="stylesheet" href="styles.css">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' 'unsafe-eval'; script-src 'self' 'unsafe-inline' 'unsafe-eval';">
 </head>
 <body>
-    <div class="app-container">
-        <header class="app-header">
-            <h1>🐟 Aquaculture AI Extractor</h1>
+    <div class="container">
+        <!-- Header -->
+        <div class="header">
+            <h1>🐟 Aquaculture AI Component Extractor</h1>
             <p>AI-powered component extraction for fish farming facilities</p>
-        </header>
+        </div>
 
-        <main class="app-main">
-            <!-- File Upload Section -->
-            <section class="upload-section">
-                <div class="upload-area" id="uploadArea">
-                    <div class="upload-content">
-                        <div class="upload-icon">📁</div>
-                        <h3>Drag & Drop Documents</h3>
-                        <p>Or click to select PDFs and Excel files</p>
-                        <button class="btn-primary" id="selectFilesBtn">Select Files</button>
-                    </div>
+        <!-- Step Indicators -->
+        <div class="step-indicators">
+            <div class="step-indicator" data-step="upload">
+                📁 Upload Files
+            </div>
+            <div class="step-indicator" data-step="mapping">
+                🗺️ Position Mapping
+            </div>
+            <div class="step-indicator" data-step="processing">
+                🤖 AI Processing
+            </div>
+            <div class="step-indicator" data-step="results">
+                📊 Results
+            </div>
+        </div>
+
+        <!-- Upload Area -->
+        <div id="uploadArea" class="content-area">
+            <div class="upload-area" id="uploadDropZone">
+                <div class="upload-icon">📁</div>
+                <div class="upload-text">
+                    <h3>Drop Files Here</h3>
+                    <p>Or click to select PDF and Excel documents</p>
+                    <button id="selectFilesBtn" class="btn-primary">Select Files</button>
+                </div>
+            </div>
+
+            <div id="fileList" class="file-list">
+                <h4>Selected Files</h4>
+                <ul id="selectedFiles"></ul>
+                <div class="file-actions">
+                    <button id="mappingBtn" class="btn-primary" disabled>Setup Position Mapping</button>
+                    <button id="processBtn" class="btn-primary" disabled>Process with AI</button>
+                    <button id="clearBtn" class="btn-secondary">Clear Files</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Position Mapping Area -->
+        <div id="mappingArea" class="content-area">
+            <div class="position-mapper">
+                <div class="mapper-header">
+                    <h3>Position Mapping Setup</h3>
+                    <p>Configure your facility and map document references to internal positions</p>
                 </div>
                 
-                <div class="file-list" id="fileList" style="display: none;">
-                    <h4>Selected Files:</h4>
-                    <ul id="selectedFiles"></ul>
-                    <button class="btn-success" id="processBtn">🤖 Extract Components</button>
-                </div>
-            </section>
+                <!-- Position mapping content will be injected here by JavaScript -->
+            </div>
+        </div>
 
-            <!-- Processing Status -->
-            <section class="status-section" id="statusSection" style="display: none;">
-                <div class="status-card">
-                    <h4>🔄 Processing...</h4>
+        <!-- Processing Area -->
+        <div id="processingArea" class="content-area">
+            <div class="processing-status">
+                <h3>🔄 Processing Files with AI</h3>
+                <p>Extracting components from your documents...</p>
+                
+                <div class="progress-container">
                     <div class="progress-bar">
-                        <div class="progress-fill" id="progressFill"></div>
+                        <div id="progressBar" class="progress-fill"></div>
                     </div>
-                    <p id="statusText">Initializing AI extraction...</p>
+                    <div id="progressStatus" class="progress-status">Initializing...</div>
                 </div>
-            </section>
 
-            <!-- Results Section -->
-            <section class="results-section" id="resultsSection" style="display: none;">
-                <div class="results-header">
-                    <h3>📊 Extraction Results</h3>
-                    <div class="results-actions">
-                        <button class="btn-secondary" id="reviewBtn">Review & Edit</button>
-                        <button class="btn-primary" id="saveToDatabaseBtn">💾 Save to Database</button>
-                        <button class="btn-outline" id="exportBtn">📤 Export CSV</button>
+                <div class="processing-details">
+                    <div class="detail-item">
+                        <span class="detail-label">Files:</span>
+                        <span id="fileCount" class="detail-value">0</span>
+                    </div>
+                    <div class="detail-item">
+                        <span class="detail-label">Position Mappings:</span>
+                        <span id="mappingCount" class="detail-value">0</span>
+                    </div>
+                    <div class="detail-item">
+                        <span class="detail-label">Status:</span>
+                        <span id="currentStatus" class="detail-value">Waiting...</span>
                     </div>
                 </div>
-                
-                <div class="results-grid" id="resultsGrid">
-                    <!-- Results will be populated here -->
-                </div>
-            </section>
+            </div>
+        </div>
 
-            <!-- Settings Panel -->
-            <section class="settings-section" id="settingsSection" style="display: none;">
-                <div class="settings-card">
-                    <h4>⚙️ Database Configuration</h4>
-                    <form id="dbConfigForm">
-                        <div class="form-group">
-                            <label for="dbServer">SQL Server:</label>
-                            <input type="text" id="dbServer" placeholder="localhost" required>
-                        </div>
-                        <div class="form-group">
-                            <label for="dbName">Database Name:</label>
-                            <input type="text" id="dbName" placeholder="AquacultureDB" required>
-                        </div>
-                        <div class="form-group">
-                            <label for="dbUser">Username:</label>
-                            <input type="text" id="dbUser" placeholder="sa" required>
-                        </div>
-                        <div class="form-group">
-                            <label for="dbPassword">Password:</label>
-                            <input type="password" id="dbPassword" required>
-                        </div>
-                        <button type="submit" class="btn-primary">Test Connection</button>
-                    </form>
-                </div>
-            </section>
-        </main>
+        <!-- Results Area -->
+        <div id="resultsArea" class="content-area">
+            <!-- Results content will be injected here by JavaScript -->
+        </div>
 
-        <footer class="app-footer">
-            <button class="btn-ghost" id="settingsBtn">⚙️ Settings</button>
-            <span class="status-indicator" id="dbStatus">Database: Not Connected</span>
-        </footer>
+        <!-- Footer -->
+        <div class="app-footer">
+            <div class="status-indicator">
+                <span id="appStatus">Ready</span>
+            </div>
+            <div class="app-info">
+                Aquaculture AI Extractor v1.0
+            </div>
+        </div>
     </div>
 
+    <!-- Load the renderer script -->
     <script src="renderer.js"></script>
 </body>
 </html>

@@ -1,310 +1,174 @@
 const { ipcRenderer } = require('electron');
-const FileProcessor = require('../services/fileProcessor');
-const logger = require('../utils/logger');
 
+// DOM elements - with null checks
 const uploadArea = document.getElementById('uploadArea');
+const uploadDropZone = document.getElementById('uploadDropZone') || uploadArea;
 const selectFilesBtn = document.getElementById('selectFilesBtn');
 const fileList = document.getElementById('fileList');
 const selectedFiles = document.getElementById('selectedFiles');
 const processBtn = document.getElementById('processBtn');
-const statusSection = document.getElementById('statusSection');
-const statusText = document.getElementById('statusText');
-const progressFill = document.getElementById('progressFill');
-const resultsSection = document.getElementById('resultsSection');
-const resultsGrid = document.getElementById('resultsGrid');
-const settingsBtn = document.getElementById('settingsBtn');
-const settingsSection = document.getElementById('settingsSection');
+const mappingBtn = document.getElementById('mappingBtn');
+const clearBtn = document.getElementById('clearBtn');
+const resultsArea = document.getElementById('resultsArea');
+const processingArea = document.getElementById('processingArea');
+const progressBar = document.getElementById('progressBar');
+const progressStatus = document.getElementById('progressStatus');
 
+// Import services
+const FileProcessor = require('../services/fileProcessor');
+const logger = require('../utils/logger');
+
+// Initialize services
+const fileProcessor = new FileProcessor();
+
+// Global state
 let uploadedFiles = [];
-let extractedData = null;
-let fileProcessor = new FileProcessor();
 let positionMappings = [];
-let currentStep = 'upload';
+let extractedData = null;
 
+// Initialize the application
 document.addEventListener('DOMContentLoaded', () => {
-    initializeEventListeners();
-    checkDatabaseConnection();
-    showStep('upload');
+    try {
+        initializeEventListeners();
+        showStep('upload');
+        logger.info('AI Component Extractor initialized');
+    } catch (error) {
+        console.error('Initialization failed:', error);
+        showError('Failed to initialize application: ' + error.message);
+    }
 });
 
 function initializeEventListeners() {
-    uploadArea.addEventListener('click', selectFiles);
-    selectFilesBtn.addEventListener('click', selectFiles);
-    processBtn.addEventListener('click', handleProcessClick);
+    // File upload events
+    if (selectFilesBtn) {
+        selectFilesBtn.addEventListener('click', selectFiles);
+    }
+    if (uploadDropZone) {
+        uploadDropZone.addEventListener('click', selectFiles);
+        uploadDropZone.addEventListener('dragover', handleDragOver);
+        uploadDropZone.addEventListener('dragleave', handleDragLeave);
+        uploadDropZone.addEventListener('drop', handleDrop);
+    }
     
-    uploadArea.addEventListener('dragover', handleDragOver);
-    uploadArea.addEventListener('dragleave', handleDragLeave);
-    uploadArea.addEventListener('drop', handleDrop);
+    // Button events
+    if (processBtn) {
+        processBtn.addEventListener('click', processFiles);
+    }
+    if (mappingBtn) {
+        mappingBtn.addEventListener('click', setupPositionMapping);
+    }
+    if (clearBtn) {
+        clearBtn.addEventListener('click', clearAll);
+    }
     
-    settingsBtn.addEventListener('click', toggleSettings);
-    settingsSection.addEventListener('click', (e) => {
-        if (e.target === settingsSection) {
-            toggleSettings();
-        }
-    });
-    
-    document.getElementById('reviewBtn').addEventListener('click', reviewResults);
-    document.getElementById('saveToDatabaseBtn').addEventListener('click', saveToDatabase);
-    document.getElementById('exportBtn').addEventListener('click', exportResults);
+    logger.info('Event listeners initialized');
 }
 
 function showStep(step) {
-    currentStep = step;
+    const areas = {
+        'upload': uploadArea,
+        'mapping': document.getElementById('mappingArea'),
+        'processing': processingArea,
+        'results': resultsArea
+    };
     
-    document.querySelectorAll('.app-step').forEach(el => {
-        el.style.display = 'none';
+    // Hide all areas
+    Object.values(areas).forEach(area => {
+        if (area) area.style.display = 'none';
     });
     
-    const stepElement = document.getElementById(`step-${step}`);
-    if (stepElement) {
-        stepElement.style.display = 'block';
+    // Show current area
+    if (areas[step]) {
+        areas[step].style.display = 'block';
+    }
+    
+    updateStepIndicators(step);
+}
+
+function updateStepIndicators(currentStep) {
+    const indicators = document.querySelectorAll('.step-indicator');
+    const stepOrder = ['upload', 'mapping', 'processing', 'results'];
+    const currentIndex = stepOrder.indexOf(currentStep);
+    
+    indicators.forEach((indicator, index) => {
+        indicator.classList.remove('active', 'completed');
+        
+        if (index < currentIndex) {
+            indicator.classList.add('completed');
+        } else if (index === currentIndex) {
+            indicator.classList.add('active');
+        }
+    });
+}
+
+async function selectFiles() {
+    try {
+        const files = await ipcRenderer.invoke('select-files');
+        if (files && files.length > 0) {
+            uploadedFiles = files;
+            displaySelectedFiles();
+            logger.info(`Selected ${files.length} files for processing`);
+        }
+    } catch (error) {
+        showError('Failed to select files: ' + error.message);
+        logger.error('File selection failed', error);
+    }
+}
+
+function displaySelectedFiles() {
+    if (!selectedFiles) return;
+    
+    selectedFiles.innerHTML = '';
+    
+    uploadedFiles.forEach(filePath => {
+        const fileName = filePath.split('/').pop().split('\\').pop();
+        const fileExt = fileName.split('.').pop().toLowerCase();
+        const icon = fileExt === 'pdf' ? '📄' : '📊';
+        
+        const li = document.createElement('li');
+        li.innerHTML = `${icon} ${fileName}`;
+        selectedFiles.appendChild(li);
+    });
+    
+    if (fileList) {
+        fileList.style.display = 'block';
+    }
+    if (uploadDropZone) {
+        uploadDropZone.style.display = 'none';
     }
     
     updateProcessButton();
 }
 
 function updateProcessButton() {
-    const processBtn = document.getElementById('processBtn');
-    
-    switch (currentStep) {
-        case 'upload':
-            processBtn.textContent = 'Setup Position Mapping';
-            processBtn.style.display = uploadedFiles.length > 0 ? 'block' : 'none';
-            break;
-        case 'mapping':
-            processBtn.textContent = 'Extract Components with AI';
-            processBtn.style.display = positionMappings.length > 0 ? 'block' : 'none';
-            break;
-        case 'processing':
-            processBtn.style.display = 'none';
-            break;
-        case 'results':
-            processBtn.style.display = 'none';
-            break;
+    if (uploadedFiles.length > 0) {
+        if (mappingBtn) mappingBtn.disabled = false;
+        if (processBtn) processBtn.disabled = positionMappings.length === 0;
+    } else {
+        if (mappingBtn) mappingBtn.disabled = true;
+        if (processBtn) processBtn.disabled = true;
     }
-}
-
-function handleProcessClick() {
-    switch (currentStep) {
-        case 'upload':
-            showPositionMapping();
-            break;
-        case 'mapping':
-            processFiles();
-            break;
-    }
-}
-
-function showPositionMapping() {
-    if (uploadedFiles.length === 0) {
-        showError('No files selected');
-        return;
-    }
-    
-    currentStep = 'mapping';
-    
-    const mappingContainer = document.getElementById('position-mapping-container');
-    if (!mappingContainer) {
-        createMappingContainer();
-    }
-    
-    showStep('mapping');
-    renderPositionMapper();
-}
-
-function createMappingContainer() {
-    const container = document.createElement('section');
-    container.id = 'position-mapping-container';
-    container.className = 'app-step position-mapping-section';
-    container.style.display = 'none';
-    
-    const mainElement = document.querySelector('.app-main');
-    mainElement.insertBefore(container, document.getElementById('statusSection'));
-}
-
-function renderPositionMapper() {
-    console.log('renderPositionMapper called');
-    
-    const container = document.getElementById('position-mapping-container');
-    if (!container) {
-        console.log('Container not found, returning');
-        return;
-    }
-    
-    console.log('Setting innerHTML');
-    container.innerHTML = `
-        <div class="position-mapper">
-            <div class="mapper-header">
-                <div>
-                    <h3>Position Mapping Setup</h3>
-                    <p>Map document references to internal position numbers</p>
-                </div>
-            </div>
-
-            <div id="mapping-sections" class="mapping-sections">
-                Loading...
-            </div>
-        </div>
-    `;
-    
-    console.log('innerHTML set, calling generateMappings');
-    generateMappings();
-    console.log('renderPositionMapper completed');
-}
-
-function toggleFacilityConfig() {
-    const config = document.getElementById('facility-config');
-    const isVisible = config.style.display !== 'none';
-    config.style.display = isVisible ? 'none' : 'block';
-}
-
-function applyFacilityConfig() {
-    generateMappings();
-    document.getElementById('facility-config').style.display = 'none';
-}
-
-function generateMappings() {
-    const numMooringLines = parseInt(document.getElementById('numMooringLines').value);
-    const numBuoys = parseInt(document.getElementById('numBuoys').value);
-    const numBridles = parseInt(document.getElementById('numBridles').value);
-    const numFrameLines = parseInt(document.getElementById('numFrameLines').value);
-    
-    const mappingTypes = [
-        { type: 'Mooring Lines', start: 101, count: numMooringLines, color: '#4facfe' },
-        { type: 'Buoys', start: 301, count: numBuoys, color: '#28a745' },
-        { type: 'Bridles', start: 501, count: numBridles, color: '#ffc107' },
-        { type: 'Frame Lines', start: 701, count: numFrameLines, color: '#6c757d' }
-    ];
-    
-    const sectionsContainer = document.getElementById('mapping-sections');
-    sectionsContainer.innerHTML = '';
-    
-    mappingTypes.forEach(({ type, start, count, color }) => {
-        if (count === 0) return;
-        
-        const section = document.createElement('div');
-        section.className = 'mapping-section';
-        
-        let sectionHTML = `
-            <h4 style="background: ${color}">${type}</h4>
-            <div class="mapping-grid">
-        `;
-        
-        for (let i = 0; i < count; i++) {
-            const position = start + i;
-            sectionHTML += `
-                <div class="mapping-row">
-                    <div class="mapping-info">
-                        <span class="position-number" style="background: ${color}">${position}</span>
-                        <span class="position-desc">${type.slice(0, -1)} ${i + 1}</span>
-                    </div>
-                    <div class="mapping-input">
-                        <input type="text" 
-                               placeholder="Doc ref (e.g. 4b, 1a)" 
-                               data-position="${position}"
-                               onchange="updateMappingCount()">
-                    </div>
-                </div>
-            `;
-        }
-        
-        sectionHTML += `</div>`;
-        section.innerHTML = sectionHTML;
-        sectionsContainer.appendChild(section);
-    });
-    
-    updateMappingCount();
-}
-
-function updateMappingCount() {
-    const inputs = document.querySelectorAll('[data-position]');
-    const filledInputs = Array.from(inputs).filter(input => input.value.trim());
-    
-    positionMappings = filledInputs.map(input => ({
-        internalPosition: parseInt(input.dataset.position),
-        documentReference: input.value.trim()
-    }));
-    
-    document.getElementById('mappingStats').textContent = 
-        `${positionMappings.length} positions mapped`;
-    
-    updateProcessButton();
-}
-
-function saveMappings() {
-    if (positionMappings.length === 0) {
-        showError('No mappings to save');
-        return;
-    }
-    
-    const facilityId = `facility_${Date.now()}`;
-    const mappingData = {
-        facilityId,
-        mappings: positionMappings,
-        createdAt: new Date().toISOString()
-    };
-    
-    try {
-        localStorage.setItem(`position_mapping_${facilityId}`, JSON.stringify(mappingData));
-        showNotification('Position mappings saved successfully!', 'success');
-        logger.info('Position mappings saved', mappingData);
-    } catch (error) {
-        logger.error('Failed to save mappings', error);
-        showError('Failed to save mappings: ' + error.message);
-    }
-}
-
-function loadMappings() {
-    showNotification('Load mappings feature coming soon!', 'info');
-}
-
-function addCustomMapping() {
-    showNotification('Custom mapping feature coming soon!', 'info');
-}
-
-async function selectFiles() {
-    try {
-        const filePaths = await ipcRenderer.invoke('select-files');
-        if (filePaths && filePaths.length > 0) {
-            uploadedFiles = filePaths;
-            displaySelectedFiles();
-        }
-    } catch (error) {
-        logger.error('Error selecting files', error);
-        showError('Error selecting files: ' + error.message);
-    }
-}
-
-function displaySelectedFiles() {
-    selectedFiles.innerHTML = '';
-    uploadedFiles.forEach(filePath => {
-        const li = document.createElement('li');
-        const fileName = filePath.split(/[/\\]/).pop();
-        const fileExt = fileName.split('.').pop().toLowerCase();
-        const icon = fileExt === 'pdf' ? '📄' : '📊';
-        li.innerHTML = `${icon} ${fileName}`;
-        selectedFiles.appendChild(li);
-    });
-    
-    fileList.style.display = 'block';
-    uploadArea.style.display = 'none';
-    showStep('upload');
-    updateProcessButton();
 }
 
 function handleDragOver(e) {
     e.preventDefault();
-    uploadArea.classList.add('dragover');
+    if (uploadDropZone) {
+        uploadDropZone.classList.add('dragover');
+    }
 }
 
 function handleDragLeave(e) {
     e.preventDefault();
-    uploadArea.classList.remove('dragover');
+    if (uploadDropZone) {
+        uploadDropZone.classList.remove('dragover');
+    }
 }
 
 function handleDrop(e) {
     e.preventDefault();
-    uploadArea.classList.remove('dragover');
+    if (uploadDropZone) {
+        uploadDropZone.classList.remove('dragover');
+    }
     
     const files = Array.from(e.dataTransfer.files);
     const validFiles = files.filter(file => {
@@ -320,6 +184,207 @@ function handleDrop(e) {
     }
 }
 
+function setupPositionMapping() {
+    if (uploadedFiles.length === 0) {
+        showError('Please select files first');
+        return;
+    }
+    
+    showStep('mapping');
+    initializePositionMapper();
+}
+
+function initializePositionMapper() {
+    const mappingArea = document.getElementById('mappingArea');
+    if (!mappingArea) return;
+    
+    mappingArea.innerHTML = `
+        <div class="position-mapper">
+            <div class="mapper-header">
+                <h3>Setup Position Mapping</h3>
+                <p>Map document references to internal positions</p>
+            </div>
+            
+            <div class="facility-config">
+                <h4>Configure Facility</h4>
+                <div class="config-row">
+                    <label>Mooring Lines:</label>
+                    <input type="number" id="mooringLinesCount" value="8" min="1" max="20">
+                </div>
+                <div class="config-row">
+                    <label>Buoys:</label>
+                    <input type="number" id="buoysCount" value="4" min="1" max="10">
+                </div>
+                <div class="config-row">
+                    <label>Bridles:</label>
+                    <input type="number" id="bridlesCount" value="4" min="1" max="10">
+                </div>
+                <button onclick="generatePositions()" class="btn-secondary">Generate Positions</button>
+            </div>
+            
+            <div id="positionMappings" class="position-mappings">
+                <h4>Position Mappings</h4>
+                <div id="mappingsList"></div>
+                <button onclick="addCustomMapping()" class="btn-secondary">Add Custom Mapping</button>
+            </div>
+            
+            <div class="mapping-actions">
+                <button onclick="saveMappings()" class="btn-primary">Save Mappings</button>
+                <button onclick="backToUpload()" class="btn-secondary">Back to Upload</button>
+            </div>
+        </div>
+    `;
+}
+
+function generatePositions() {
+    const mooringCount = parseInt(document.getElementById('mooringLinesCount')?.value || 8);
+    const buoyCount = parseInt(document.getElementById('buoysCount')?.value || 4);
+    const bridleCount = parseInt(document.getElementById('bridlesCount')?.value || 4);
+    
+    const positions = [];
+    
+    // Generate mooring line positions (101-199)
+    for (let i = 1; i <= mooringCount; i++) {
+        positions.push({
+            internal: 100 + i,
+            type: 'Mooring Line',
+            description: `Mooring Line ${i}`,
+            docRef: ''
+        });
+    }
+    
+    // Generate buoy positions (301-399)  
+    for (let i = 1; i <= buoyCount; i++) {
+        positions.push({
+            internal: 300 + i,
+            type: 'Buoy',
+            description: `Buoy ${i}`,
+            docRef: ''
+        });
+    }
+    
+    // Generate bridle positions (501-599)
+    for (let i = 1; i <= bridleCount; i++) {
+        positions.push({
+            internal: 500 + i,
+            type: 'Bridle', 
+            description: `Bridle ${i}`,
+            docRef: ''
+        });
+    }
+    
+    renderMappingsList(positions);
+}
+
+function renderMappingsList(positions) {
+    const mappingsList = document.getElementById('mappingsList');
+    if (!mappingsList) return;
+    
+    mappingsList.innerHTML = positions.map((pos, index) => `
+        <div class="mapping-row">
+            <div class="position-info">
+                <span class="position-number">${pos.internal}</span>
+                <span class="position-type">${pos.type}</span>
+                <span class="position-desc">${pos.description}</span>
+            </div>
+            <div class="document-reference">
+                <input 
+                    type="text" 
+                    placeholder="Document ref (e.g. 1a, 2b, 11c)"
+                    value="${pos.docRef}"
+                    oninput="updateMappingReference(${index}, this.value)"
+                />
+            </div>
+        </div>
+    `).join('');
+    
+    window.currentPositions = positions;
+}
+
+function updateMappingReference(index, value) {
+    if (window.currentPositions) {
+        window.currentPositions[index].docRef = value;
+    }
+}
+
+function addCustomMapping() {
+    const customPos = {
+        internal: parseInt(prompt('Enter internal position number:') || '0'),
+        type: 'Custom',
+        description: prompt('Enter position description:') || 'Custom Position',
+        docRef: prompt('Enter document reference:') || ''
+    };
+    
+    if (customPos.internal > 0) {
+        window.currentPositions = window.currentPositions || [];
+        window.currentPositions.push(customPos);
+        renderMappingsList(window.currentPositions);
+    }
+}
+
+function saveMappings() {
+    if (!window.currentPositions) {
+        showError('No positions to save');
+        return;
+    }
+    
+    // Filter positions with document references
+    positionMappings = window.currentPositions
+        .filter(pos => pos.docRef && pos.docRef.trim())
+        .map(pos => ({
+            documentReference: pos.docRef.trim(),
+            internalPosition: parseInt(pos.internal),
+            positionType: pos.type,
+            description: pos.description
+        }));
+    
+    if (positionMappings.length === 0) {
+        showError('Please add document references to at least one position');
+        return;
+    }
+    
+    showNotification(`Saved ${positionMappings.length} position mappings`, 'success');
+    updateProcessButton();
+    
+    // Show mapping summary
+    displayMappingSummary();
+    
+    logger.info('Position mappings saved', { count: positionMappings.length });
+}
+
+function displayMappingSummary() {
+    const mappingArea = document.getElementById('mappingArea');
+    if (!mappingArea) return;
+    
+    const summaryDiv = document.createElement('div');
+    summaryDiv.className = 'position-mappings-summary';
+    summaryDiv.innerHTML = `
+        <h5>Position Mappings Summary</h5>
+        <div class="mappings-grid">
+            ${positionMappings.map(mapping => `
+                <div class="mapping-item">
+                    <span class="doc-ref">"${mapping.documentReference}"</span>
+                    <span class="arrow">→</span>  
+                    <span class="internal-pos">Position ${mapping.internalPosition}</span>
+                    <span class="pos-type">(${mapping.positionType})</span>
+                </div>
+            `).join('')}
+        </div>
+        <button onclick="proceedToProcessing()" class="btn-primary">Process Files with AI</button>
+    `;
+    
+    mappingArea.appendChild(summaryDiv);
+}
+
+function proceedToProcessing() {
+    showStep('processing');
+    processFiles();
+}
+
+function backToUpload() {
+    showStep('upload');
+}
+
 async function processFiles() {
     if (uploadedFiles.length === 0) {
         showError('No files selected');
@@ -331,6 +396,7 @@ async function processFiles() {
         return;
     }
     
+    showStep('processing');
     showProcessingStatus();
     logger.info(`Starting processing of ${uploadedFiles.length} files with AI extraction`);
     
@@ -360,338 +426,305 @@ async function processFiles() {
         await updateProgress(100, 'AI extraction complete!');
         
         setTimeout(() => {
-            hideProcessingStatus();
-            showResults();
-        }, 500);
+            displayResults(extractedData);
+            showStep('results');
+        }, 1000);
         
     } catch (error) {
-        logger.error('AI file processing failed', error);
-        hideProcessingStatus();
-        showError('AI processing failed: ' + error.message);
+        logger.error('File processing failed', error);
+        showError('Processing failed: ' + error.message);
     }
 }
 
-function applyPositionMappings(results) {
-    const mappingLookup = positionMappings.reduce((acc, mapping) => {
-        acc[mapping.documentReference.toLowerCase()] = mapping.internalPosition;
-        return acc;
-    }, {});
-    
-    logger.info('Applying position mappings', { mappingLookup, resultsCount: results.length });
-    
-    return results.map(result => ({
-        ...result,
-        mappingLookup,
-        positionMappingsApplied: true
-    }));
-}
-
 function showProcessingStatus() {
-    currentStep = 'processing';
-    showStep('processing');
-    statusSection.style.display = 'block';
-    resultsSection.style.display = 'none';
+    if (progressBar) progressBar.style.width = '0%';
+    if (progressStatus) progressStatus.textContent = 'Starting AI extraction...';
 }
 
-function hideProcessingStatus() {
-    statusSection.style.display = 'none';
+function updateProgress(percentage, status) {
+    return new Promise(resolve => {
+        if (progressBar) progressBar.style.width = percentage + '%';
+        if (progressStatus) progressStatus.textContent = status;
+        
+        setTimeout(resolve, 100);
+    });
 }
 
-async function updateProgress(percent, message) {
-    progressFill.style.width = percent + '%';
-    statusText.textContent = message;
-    await new Promise(resolve => setTimeout(resolve, 300));
+function applyPositionMappings(results) {
+    return results.map(result => {
+        if (result.success && result.aiExtraction?.success) {
+            const aiData = result.aiExtraction.data;
+            
+            if (aiData.component_groups) {
+                aiData.component_groups = aiData.component_groups.map(group => {
+                    const mapping = positionMappings.find(m => 
+                        m.documentReference.toLowerCase() === group.document_reference.toLowerCase()
+                    );
+                    
+                    return {
+                        ...group,
+                        internal_position: mapping ? mapping.internalPosition : null,
+                        position_type: mapping ? mapping.positionType : null,
+                        mapping_found: !!mapping
+                    };
+                });
+            }
+        }
+        
+        return result;
+    });
 }
 
-function showResults() {
-    currentStep = 'results';
-    showStep('results');
-    resultsSection.style.display = 'block';
-    renderResults();
-}
-
-function renderResults() {
-    if (!extractedData) return;
+function displayResults(data) {
+    if (!resultsArea) return;
     
-    const { results, summary, positionMappings } = extractedData;
+    resultsArea.innerHTML = `
+        <div class="results-container">
+            <div class="results-header">
+                <h3>🔍 AI Extraction Results</h3>
+                <p>Processed ${data.summary.totalFiles} files with AI component extraction</p>
+                <div class="results-stats">
+                    <div class="stat-item">
+                        <span class="stat-value">${data.summary.successful}</span>
+                        <span class="stat-label">Successful</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-value">${data.summary.aiComponentsFound || 0}</span>
+                        <span class="stat-label">Components Found</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-value">${data.positionMappings.length}</span>
+                        <span class="stat-label">Positions Mapped</span>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="results-content">
+                ${data.results.map(renderFileResult).join('')}
+            </div>
+            
+            <div class="results-actions">
+                <button onclick="exportResults()" class="btn-primary">Export to CSV</button>
+                <button onclick="clearAll()" class="btn-secondary">Start Over</button>
+            </div>
+        </div>
+    `;
+}
+
+function renderFileResult(result) {
+    const { fileName, success, aiExtraction, error } = result;
+    const icon = fileName.endsWith('.pdf') ? '📄' : '📊';
     
-    let html = `
-        <div class="processing-summary">
-            <h4>Processing Summary with AI</h4>
-            <div class="summary-stats">
-                <div class="stat">
-                    <span class="stat-value">${summary.successful}</span>
-                    <span class="stat-label">Files Processed</span>
+    if (!success) {
+        return `
+            <div class="file-result error">
+                <div class="file-header">
+                    <h5>${icon} ${fileName}</h5>
+                    <span class="status error">Failed</span>
                 </div>
-                <div class="stat">
-                    <span class="stat-value">${getTotalAIComponents(results)}</span>
-                    <span class="stat-label">AI Components Found</span>
+                <div class="error-message">
+                    <p>Error: ${error}</p>
                 </div>
-                <div class="stat">
-                    <span class="stat-value">${positionMappings.length}</span>
-                    <span class="stat-label">Position Mappings</span>
+            </div>
+        `;
+    }
+    
+    if (!aiExtraction || !aiExtraction.success) {
+        return `
+            <div class="file-result warning">
+                <div class="file-header">
+                    <h5>${icon} ${fileName}</h5>
+                    <span class="status warning">AI Extraction Failed</span>
+                </div>
+                <div class="warning-message">
+                    <p>File processed but AI extraction failed: ${aiExtraction?.error || 'Unknown error'}</p>
+                </div>
+            </div>
+        `;
+    }
+    
+    const aiData = aiExtraction.data;
+    const componentGroups = aiData.component_groups || [];
+    const totalComponents = componentGroups.reduce((sum, group) => sum + (group.components?.length || 0), 0);
+    
+    return `
+        <div class="file-result success">
+            <div class="file-header">
+                <h5>${icon} ${fileName}</h5>
+                <span class="status success">Success</span>
+            </div>
+            
+            <div class="ai-extraction-results">
+                <h6>🤖 AI Extraction Results</h6>
+                <div class="ai-summary">
+                    <div class="ai-stat">
+                        <span class="ai-value">${componentGroups.length}</span>
+                        <span class="ai-label">Position Groups</span>
+                    </div>
+                    <div class="ai-stat">
+                        <span class="ai-value">${totalComponents}</span>
+                        <span class="ai-label">Components</span>
+                    </div>
+                </div>
+                
+                <div class="component-groups">
+                    ${componentGroups.map(renderComponentGroup).join('')}
                 </div>
             </div>
         </div>
     `;
+}
+
+function renderComponentGroup(group) {
+    const mappingStatus = group.mapping_found ? 
+        `<span class="mapping-found">→ Position ${group.internal_position}</span>` :
+        `<span class="mapping-missing">No mapping found</span>`;
     
-    if (positionMappings.length > 0) {
-        html += `
-            <div class="position-mappings-summary">
-                <h5>Position Mappings Applied</h5>
-                <div class="mappings-list">
-                    ${positionMappings.map(mapping => `
-                        <span class="mapping-badge">
-                            ${mapping.internalPosition} ← "${mapping.documentReference}"
-                        </span>
-                    `).join('')}
+    const components = group.components || [];
+    
+    return `
+        <div class="component-group">
+            <div class="group-header">
+                <h6>📍 "${group.document_reference}" ${mappingStatus}</h6>
+                <span class="component-count">${components.length} components</span>
+            </div>
+            
+            <div class="components-list">
+                ${components.map(renderComponent).join('')}
+            </div>
+        </div>
+    `;
+}
+
+function renderComponent(component) {
+    const confidenceClass = (component.confidence || 0) >= 0.8 ? 'high' : 
+                           (component.confidence || 0) >= 0.6 ? 'medium' : 'low';
+    
+    const specs = [];
+    if (component.specifications?.length_m) specs.push(`${component.specifications.length_m}m`);
+    if (component.specifications?.diameter_mm) specs.push(`⌀${component.specifications.diameter_mm}mm`);
+    if (component.specifications?.weight_kg) specs.push(`${component.specifications.weight_kg}kg`);
+    
+    return `
+        <div class="component-item">
+            <div class="component-main">
+                <span class="component-type">${component.type || 'unknown'}</span>
+                <span class="component-quantity">×${component.quantity || 1}</span>
+                <span class="component-specs">${specs.join(' · ')}</span>
+            </div>
+            <div class="component-details">
+                <div class="component-description">${component.description || 'No description'}</div>
+                <div class="component-meta">
+                    ${component.manufacturer ? `<span class="manufacturer">by ${component.manufacturer}</span>` : ''}
+                    ${component.part_number ? `<span class="part-number">#${component.part_number}</span>` : ''}
+                    <span class="confidence ${confidenceClass}">${Math.round((component.confidence || 0) * 100)}%</span>
                 </div>
             </div>
-        `;
+        </div>
+    `;
+}
+
+function exportResults() {
+    if (!extractedData) {
+        showError('No results to export');
+        return;
     }
     
-    results.forEach(result => {
-        if (result.success) {
-            html += renderFileResult(result);
-        } else {
-            html += `
-                <div class="file-result error">
-                    <h5>❌ ${result.fileName}</h5>
-                    <p class="error-message">Error: ${result.error}</p>
-                </div>
-            `;
+    // Prepare CSV data
+    const csvData = [];
+    csvData.push(['File', 'Document Reference', 'Internal Position', 'Component Type', 'Description', 'Quantity', 'Length (m)', 'Diameter (mm)', 'Weight (kg)', 'Manufacturer', 'Part Number', 'Confidence']);
+    
+    extractedData.results.forEach(result => {
+        if (result.success && result.aiExtraction?.success) {
+            const aiData = result.aiExtraction.data;
+            const fileName = result.fileName;
+            
+            aiData.component_groups?.forEach(group => {
+                (group.components || []).forEach(component => {
+                    csvData.push([
+                        fileName,
+                        group.document_reference,
+                        group.internal_position || 'Not Mapped',
+                        component.type,
+                        component.description,
+                        component.quantity,
+                        component.specifications?.length_m || '',
+                        component.specifications?.diameter_mm || '',
+                        component.specifications?.weight_kg || '',
+                        component.manufacturer || '',
+                        component.part_number || '',
+                        Math.round((component.confidence || 0) * 100) + '%'
+                    ]);
+                });
+            });
         }
     });
     
-    if (summary.errors.length > 0) {
-        html += `
-            <div class="errors-section">
-                <h5>⚠️ Processing Errors</h5>
-                ${summary.errors.map(err => `
-                    <div class="error-item">
-                        <strong>${err.fileName}:</strong> ${err.error}
-                    </div>
-                `).join('')}
-            </div>
-        `;
-    }
+    // Create and download CSV
+    const csvContent = csvData.map(row => 
+        row.map(field => `"${field}"`).join(',')
+    ).join('\n');
     
-    resultsGrid.innerHTML = html;
+    const blob = new Blob([csvContent], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `aquaculture_extraction_${new Date().toISOString().split('T')[0]}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    
+    showNotification('Results exported to CSV', 'success');
 }
 
-function getTotalAIComponents(results) {
-    return results.reduce((total, result) => {
-        if (result.aiExtraction && result.aiExtraction.success && result.aiExtraction.data) {
-            return total + (result.aiExtraction.data.extraction_summary?.total_components || 0);
-        }
-        return total;
-    }, 0);
-}
-
-function renderFileResult(result) {
-    const { fileName, data, aiExtraction } = result;
+function clearAll() {
+    uploadedFiles = [];
+    positionMappings = [];
+    extractedData = null;
+    window.currentPositions = null;
     
-    let html = `
-        <div class="file-result success">
-            <div class="file-header">
-                <h5>${getFileIcon(result.fileType)} ${fileName}</h5>
-                <span class="file-type">${data.type.toUpperCase()}</span>
-            </div>
-    `;
+    // Reset UI
+    if (selectedFiles) selectedFiles.innerHTML = '';
+    if (fileList) fileList.style.display = 'none';
+    if (uploadDropZone) uploadDropZone.style.display = 'block';
+    if (resultsArea) resultsArea.innerHTML = '';
     
-    if (data.type === 'pdf') {
-        html += `
-            <div class="pdf-info">
-                <p><strong>Pages:</strong> ${data.pageCount}</p>
-                <p><strong>Extraction:</strong> ${data.extractionMethod}</p>
-                <p><strong>Keywords found:</strong> ${data.keywords.length}</p>
-            </div>
-        `;
-    }
+    updateProcessButton();
+    showStep('upload');
     
-    if (data.type === 'excel') {
-        html += `
-            <div class="excel-info">
-                <p><strong>Sheets:</strong> ${data.totalSheets}</p>
-            </div>
-        `;
-    }
-
-    if (aiExtraction && aiExtraction.success) {
-        const aiData = aiExtraction.data;
-        html += `
-            <div class="ai-extraction-results">
-                <h6>🤖 AI Extraction Results</h6>
-                <div class="ai-summary">
-                    <span class="ai-stat">
-                        <strong>${aiData.extraction_summary.total_positions}</strong> positions
-                    </span>
-                    <span class="ai-stat">
-                        <strong>${aiData.extraction_summary.total_components}</strong> components
-                    </span>
-                    <span class="ai-stat">
-                        <strong>${Math.round(aiData.extraction_summary.confidence_average * 100)}%</strong> avg confidence
-                    </span>
-                </div>
-        `;
-
-        if (aiData.positions && aiData.positions.length > 0) {
-            html += '<div class="extracted-positions">';
-            
-            aiData.positions.slice(0, 3).forEach(position => {
-                html += `
-                    <div class="position-preview">
-                        <div class="position-header">
-                            <strong>Ref: "${position.document_reference}"</strong>
-                            <span class="component-count">${position.components.length} components</span>
-                        </div>
-                `;
-                
-                if (position.components.length > 0) {
-                    html += '<div class="component-list">';
-                    position.components.slice(0, 2).forEach(comp => {
-                        const confidenceColor = comp.confidence > 0.8 ? '#28a745' : 
-                                              comp.confidence > 0.6 ? '#ffc107' : '#dc3545';
-                        html += `
-                            <div class="component-item">
-                                <span class="component-type">${comp.type}</span>
-                                ${comp.length_m ? `<span class="component-spec">${comp.length_m}m</span>` : ''}
-                                ${comp.manufacturer ? `<span class="component-manufacturer">${comp.manufacturer}</span>` : ''}
-                                <span class="confidence-badge" style="background: ${confidenceColor}">
-                                    ${Math.round(comp.confidence * 100)}%
-                                </span>
-                            </div>
-                        `;
-                    });
-                    html += '</div>';
-                }
-                
-                html += '</div>';
-            });
-            
-            if (aiData.positions.length > 3) {
-                html += `<p class="more-positions">+ ${aiData.positions.length - 3} more positions...</p>`;
-            }
-            
-            html += '</div>';
-        }
-        
-        html += '</div>';
-    } else if (aiExtraction && !aiExtraction.success) {
-        html += `
-            <div class="ai-extraction-error">
-                <h6>⚠️ AI Extraction Failed</h6>
-                <p class="error-message">${aiExtraction.error}</p>
-            </div>
-        `;
-    }
-    
-    html += `</div>`;
-    return html;
-}
-
-function getFileIcon(fileType) {
-    return fileType === '.pdf' ? '📄' : '📊';
-}
-
-async function saveToDatabase() {
-    if (!extractedData) {
-        showError('No data to save');
-        return;
-    }
-    
-    try {
-        showNotification('Saving to database...', 'info');
-        
-        await new Promise(resolve => setTimeout(resolve, 1500));
-        
-        showNotification('Data saved successfully!', 'success');
-        
-        setTimeout(resetApp, 2000);
-        
-    } catch (error) {
-        logger.error('Database save failed', error);
-        showError('Database save failed: ' + error.message);
-    }
-}
-
-async function exportResults() {
-    if (!extractedData) {
-        showError('No data to export');
-        return;
-    }
-    
-    try {
-        const filePath = await ipcRenderer.invoke('save-results', extractedData);
-        if (filePath) {
-            showNotification(`Results exported to: ${filePath}`, 'success');
-        }
-    } catch (error) {
-        logger.error('Export failed', error);
-        showError('Export failed: ' + error.message);
-    }
-}
-
-function showError(message) {
-    showNotification(message, 'error');
+    showNotification('All data cleared', 'info');
+    logger.info('Application state reset');
 }
 
 function showNotification(message, type = 'info') {
     const notification = document.createElement('div');
     notification.className = `notification ${type}`;
-    notification.textContent = message;
-    
-    Object.assign(notification.style, {
-        position: 'fixed',
-        top: '20px',
-        right: '20px',
-        padding: '12px 20px',
-        borderRadius: '6px',
-        color: 'white',
-        fontWeight: '500',
-        zIndex: '10000',
-        maxWidth: '400px',
-        backgroundColor: type === 'error' ? '#dc3545' : 
-                        type === 'success' ? '#28a745' : '#007bff'
-    });
+    notification.innerHTML = `
+        <span class="notification-message">${message}</span>
+        <button class="notification-close" onclick="this.parentElement.remove()">×</button>
+    `;
     
     document.body.appendChild(notification);
     
     setTimeout(() => {
-        notification.remove();
-    }, 4000);
+        if (notification.parentElement) {
+            notification.remove();
+        }
+    }, 5000);
 }
 
-function resetApp() {
-    uploadedFiles = [];
-    extractedData = null;
-    positionMappings = [];
-    currentStep = 'upload';
-    
-    fileList.style.display = 'none';
-    uploadArea.style.display = 'block';
-    resultsSection.style.display = 'none';
-    selectedFiles.innerHTML = '';
-    progressFill.style.width = '0%';
-    
-    showStep('upload');
+function showError(message) {
+    showNotification(message, 'error');
+    logger.error('User error', message);
 }
 
-function toggleSettings() {
-    const isVisible = settingsSection.style.display === 'flex';
-    settingsSection.style.display = isVisible ? 'none' : 'flex';
-}
-
-function reviewResults() {
-    showNotification('Review mode coming soon!', 'info');
-}
-
-async function checkDatabaseConnection() {
-    document.getElementById('dbStatus').textContent = 'Database: Checking...';
-    
-    setTimeout(() => {
-        document.getElementById('dbStatus').textContent = 'Database: Ready';
-    }, 1000);
-}
-
-window.updateMappingCount = updateMappingCount;
+// Export functions for global access
+window.generatePositions = generatePositions;
+window.updateMappingReference = updateMappingReference;
+window.addCustomMapping = addCustomMapping;
+window.saveMappings = saveMappings;
+window.backToUpload = backToUpload;
+window.proceedToProcessing = proceedToProcessing;
+window.exportResults = exportResults;
