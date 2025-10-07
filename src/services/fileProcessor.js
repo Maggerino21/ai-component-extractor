@@ -3,13 +3,13 @@ const path = require('path');
 const pdfParse = require('pdf-parse');
 const XLSX = require('xlsx');
 const Tesseract = require('tesseract.js');
-const AIExtractor = require('./aiExtractor');
+const AzureDocumentExtractor = require('./azureDocumentExtractor');
 const logger = require('../utils/logger');
 
 class FileProcessor {
     constructor() {
-        this.supportedFormats = ['.pdf', '.xlsx', '.xls'];
-        this.aiExtractor = new AIExtractor();
+        this.aiExtractor = new AzureDocumentExtractor();
+        this.supportedFileTypes = ['.pdf', '.xlsx', '.xls'];
     }
 
     async processFiles(filePaths, positionMappings = []) {
@@ -17,51 +17,21 @@ class FileProcessor {
         
         for (let i = 0; i < filePaths.length; i++) {
             const filePath = filePaths[i];
-            const fileName = path.basename(filePath);
-            const fileExt = path.extname(filePath).toLowerCase();
-            
-            console.log(`Processing file ${i + 1}/${filePaths.length}: ${fileName}`);
+            console.log(`Processing file ${i + 1}/${filePaths.length}: ${path.basename(filePath)}`);
             
             try {
-                let extractedData;
-                
-                switch (fileExt) {
-                    case '.pdf':
-                        extractedData = await this.processPDF(filePath);
-                        break;
-                    case '.xlsx':
-                    case '.xls':
-                        extractedData = await this.processExcel(filePath);
-                        break;
-                    default:
-                        throw new Error(`Unsupported file format: ${fileExt}`);
-                }
-
-                const aiResult = await this.aiExtractor.extractComponents({
-                    fileName,
-                    type: fileExt === '.pdf' ? 'pdf' : 'excel',
-                    ...extractedData
-                }, positionMappings);
-
-                results.push({
-                    fileName,
-                    filePath,
-                    fileType: fileExt,
-                    success: true,
-                    data: extractedData,
-                    aiExtraction: aiResult,
-                    processedAt: new Date().toISOString()
-                });
-                
+                const result = await this.processFile(filePath, positionMappings);
+                results.push(result);
             } catch (error) {
-                console.error(`Error processing ${fileName}:`, error.message);
+                logger.error(`File processing failed for ${filePath}`, error);
                 results.push({
-                    fileName,
-                    filePath,
-                    fileType: fileExt,
+                    fileName: path.basename(filePath),
+                    filePath: filePath,
                     success: false,
                     error: error.message,
-                    processedAt: new Date().toISOString()
+                    fileType: path.extname(filePath).toLowerCase(),
+                    data: null,
+                    aiExtraction: null
                 });
             }
         }
@@ -69,290 +39,183 @@ class FileProcessor {
         return results;
     }
 
-    async processPDF(filePath) {
-        const dataBuffer = fs.readFileSync(filePath);
+    async processFile(filePath, positionMappings = []) {
+        const fileName = path.basename(filePath);
+        const fileType = path.extname(filePath).toLowerCase();
         
-        try {
-            const pdfData = await pdfParse(dataBuffer, {
-                normalizeWhitespace: false,
-                disableCombineTextItems: false,
-                max: 0
-            });
-            
-            const result = {
-                type: 'pdf',
-                pageCount: pdfData.numpages,
-                text: pdfData.text,
-                extractionMethod: 'text',
-                isEmpty: !pdfData.text || pdfData.text.trim().length === 0,
-                keywords: this.extractKeywords(pdfData.text)
-            };
-
-            if (result.isEmpty) {
-                console.log('No text found in PDF, attempting OCR...');
-                result.text = await this.performOCR(dataBuffer);
-                result.extractionMethod = 'ocr';
-                result.keywords = this.extractKeywords(result.text);
-            }
-
-            result.possibleComponents = this.findPossibleComponents(result.text);
-            result.possibleMooringLines = this.findPossibleMooringLines(result.text);
-
-            return result;
-        } catch (error) {
-            console.error('PDF parsing error:', error);
-            try {
-                console.log('PDF text extraction failed, trying OCR fallback...');
-                const ocrText = await this.performOCR(dataBuffer);
-                return {
-                    type: 'pdf',
-                    pageCount: 1,
-                    text: ocrText,
-                    extractionMethod: 'ocr_fallback',
-                    isEmpty: !ocrText || ocrText.trim().length === 0,
-                    keywords: this.extractKeywords(ocrText),
-                    possibleComponents: this.findPossibleComponents(ocrText),
-                    possibleMooringLines: this.findPossibleMooringLines(ocrText)
-                };
-            } catch (ocrError) {
-                throw new Error(`PDF processing failed: ${error.message}. OCR fallback also failed: ${ocrError.message}`);
-            }
+        if (!this.validateFileSupport(filePath)) {
+            throw new Error(`Unsupported file type: ${fileType}`);
         }
+        
+        let fileData;
+        
+        // Process based on file type
+        if (fileType === '.pdf') {
+            fileData = await this.processPDF(filePath);
+        } else if (['.xlsx', '.xls'].includes(fileType)) {
+            fileData = await this.processExcel(filePath);
+        }
+        
+        // Add file metadata
+        fileData.fileName = fileName;
+        fileData.filePath = filePath;
+        fileData.fileType = fileType;
+        
+        // Comprehensive AI extraction
+        const aiExtraction = await this.aiExtractor.extractComponents(fileData, positionMappings);
+        
+        return {
+            fileName,
+            filePath,
+            fileType,
+            success: true,
+            data: fileData,
+            aiExtraction: aiExtraction,
+            processedAt: new Date().toISOString()
+        };
     }
 
     async processExcel(filePath) {
-        try {
-            const workbook = XLSX.readFile(filePath);
-            const result = {
-                type: 'excel',
-                sheetNames: workbook.SheetNames,
-                sheets: []
-            };
-
-            workbook.SheetNames.forEach(sheetName => {
-                const worksheet = workbook.Sheets[sheetName];
-                const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
-                const objectData = XLSX.utils.sheet_to_json(worksheet);
-                
-                console.log(`Processing sheet: ${sheetName} with ${objectData.length} rows`);
-                
-                const sheetInfo = {
-                    name: sheetName,
-                    rowCount: jsonData.length,
-                    columnCount: jsonData[0] ? jsonData[0].length : 0,
-                    headers: jsonData[0] || [],
-                    rawData: jsonData,
-                    objectData: objectData,
-                    possibleComponents: this.parseSkrubbholmenData(objectData, sheetName),
-                    possibleMooringLines: []
-                };
-
-                result.sheets.push(sheetInfo);
-            });
-
-            return result;
-        } catch (error) {
-            throw new Error(`Excel processing failed: ${error.message}`);
-        }
-    }
-
-    parseSkrubbholmenData(data, sheetName) {
-        const parsedComponents = [];
+        const workbook = XLSX.readFile(filePath);
+        const sheets = [];
+        let totalComponents = 0;
         
-        console.log(`Parsing ${data.length} rows from sheet ${sheetName}`);
-        
-        for (let i = 0; i < data.length; i++) {
-            const row = data[i];
-            if (!row) continue;
+        // Process each sheet systematically
+        workbook.SheetNames.forEach(sheetName => {
+            console.log(`Processing sheet: ${sheetName}`);
             
-            const keys = Object.keys(row);
-            const values = Object.values(row);
+            const worksheet = workbook.Sheets[sheetName];
+            const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
             
-            // Skip if row is empty or has less than 3 values
-            if (values.length < 3 || !values[0] || !values[1] || !values[2]) continue;
+            console.log(`Parsing ${jsonData.length} rows from sheet ${sheetName}`);
             
-            const col1 = String(values[0]).trim();
-            const col2 = String(values[1]).trim();
-            const col3 = String(values[2]).trim();
-            const col4 = values[3] ? String(values[3]).trim() : '';
-            const col5 = values[4] ? String(values[4]).trim() : '';
+            // Extract ALL possible components systematically
+            const possibleComponents = [];
             
-            // Check for Skrubbholmen pattern: Position | Sequence | Component | Description | Part
-            // H01A, H01B, S04, etc.
-            const positionPattern = /^[HS]\d{2}[AB]?$|^K\d{2}[AB]?$|^[A-Z]{1,3}\d+[A-Z]?$/;
-            const sequencePattern = /^\d+$/;
-            
-            if (positionPattern.test(col1) && sequencePattern.test(col2) && col3.length > 0) {
-                // This looks like a Skrubbholmen component row
-                const component = {
-                    position_reference: col1,
-                    sequence_number: parseInt(col2),
-                    component_type: col3,
-                    description: col4,
-                    part_number: col5,
-                    raw_row: row,
-                    row_index: i + 1,
-                    sheet_name: sheetName,
-                    specifications: this.extractSpecs(col4),
-                    normalized_type: this.normalizeComponentType(col3)
-                };
-                
-                parsedComponents.push(component);
-                
-                if (i < 5) { // Debug log first few components
-                    console.log(`Found component: ${col1} | ${col2} | ${col3} | ${col4}`);
+            jsonData.forEach((row, rowIndex) => {
+                if (Array.isArray(row) && row.length >= 3) {
+                    // Look for patterns like: Position | Sequence | Type | Description
+                    const rowText = row.filter(cell => cell !== null && cell !== undefined && cell !== '').join(' | ');
+                    
+                    if (rowText.trim()) {
+                        // Check if this looks like a component row
+                        if (this.isLikelyComponentRow(rowText)) {
+                            possibleComponents.push(rowText);
+                            console.log(`Found component: ${rowText}`);
+                        }
+                    }
                 }
-            }
+            });
+            
+            console.log(`Extracted ${possibleComponents.length} components from ${sheetName}`);
+            totalComponents += possibleComponents.length;
+            
+            sheets.push({
+                name: sheetName,
+                rowCount: jsonData.length,
+                possibleComponents: possibleComponents,
+                rawData: jsonData.slice(0, 10) // Keep first 10 rows for reference
+            });
+        });
+        
+        return {
+            type: 'excel',
+            totalSheets: sheets.length,
+            totalComponents: totalComponents,
+            sheets: sheets,
+            possibleComponents: [] // Top-level components if any
+        };
+    }
+
+    isLikelyComponentRow(rowText) {
+        // More comprehensive detection of component rows
+        const componentIndicators = [
+            // Norwegian terms
+            /sjakkel|ploganker|anker|kjetting|trosse|tau|wire|kause/i,
+            /fortøyning|mooring|anchor|chain|rope|shackle|connector/i,
+            // Position patterns
+            /^[A-Z]\d{2}[A-Z]?\s*\|/i,  // H01A |, K01 |, etc.
+            /^[A-Z]+\d+\s*\|/i,         // General pattern
+            // Sequential numbers
+            /\|\s*\d+\s*\|/,            // | 1 |, | 2 |, etc.
+            // Part numbers
+            /\d{4,}/,                   // 4+ digit numbers (part numbers)
+            // Norwegian component types
+            /koblingspunkt|koblingsskive/i
+        ];
+        
+        return componentIndicators.some(pattern => pattern.test(rowText));
+    }
+
+    async processPDF(filePath) {
+        const buffer = fs.readFileSync(filePath);
+        let parsedData;
+        let extractionMethod = 'text';
+        
+        try {
+            // Try text extraction first
+            parsedData = await pdfParse(buffer);
+        } catch (error) {
+            logger.warn('PDF text extraction failed, trying OCR', error);
+            // Fallback to OCR if text extraction fails
+            parsedData = await this.extractPDFWithOCR(buffer);
+            extractionMethod = 'ocr';
         }
         
-        console.log(`Extracted ${parsedComponents.length} components from ${sheetName}`);
-        return parsedComponents;
+        const text = parsedData.text || '';
+        
+        return {
+            type: 'pdf',
+            pageCount: parsedData.numpages || 0,
+            text: text,
+            extractionMethod: extractionMethod,
+            keywords: this.extractKeywords(text),
+            possibleMooringLines: this.findMooringLineReferences(text)
+        };
     }
 
-    normalizeComponentType(rawType) {
-        const type = rawType.toLowerCase();
-        
-        if (type.includes('ploganker') || type.includes('anker')) return 'anchor';
-        if (type.includes('sjakkel')) return 'shackle';
-        if (type.includes('kjetting')) return 'chain';
-        if (type.includes('kause')) return 'thimble';
-        if (type.includes('tau') || type.includes('trosse')) return 'rope';
-        if (type.includes('master link') || type.includes('masterlink')) return 'master_link';
-        if (type.includes('t-bolt') || type.includes('bolt')) return 't_bolt';
-        if (type.includes('bøye')) return 'buoy';
-        if (type.includes('wire')) return 'wire';
-        
-        return 'other';
-    }
-
-    extractSpecs(description) {
-        if (!description) return {};
-        
-        const specs = {};
-        
-        // Weight patterns
-        if (description.includes('1700')) specs.weight_kg = 1700;
-        if (description.includes('90T')) specs.capacity_tons = 90;
-        
-        // Diameter patterns
-        const diamMatch = description.match(/(\d+)\s*mm/i);
-        if (diamMatch) specs.diameter_mm = parseInt(diamMatch[1]);
-        
-        // Length patterns  
-        const lengthMatch = description.match(/(\d+\.?\d*)\s*m(?:eter)?/i);
-        if (lengthMatch) specs.length_m = parseFloat(lengthMatch[1]);
-        
-        return specs;
-    }
-
-    async performOCR(dataBuffer) {
+    async extractPDFWithOCR(buffer) {
         try {
-            const { data: { text } } = await Tesseract.recognize(dataBuffer, 'nor+eng', {
-                logger: m => console.log(m)
+            const result = await Tesseract.recognize(buffer, 'nor', {
+                logger: m => console.log('OCR progress:', m)
             });
-            return text;
+            
+            return {
+                text: result.data.text,
+                numpages: 1 // OCR typically processes as single page
+            };
         } catch (error) {
-            console.error('OCR failed:', error);
-            return '';
+            logger.error('OCR extraction failed', error);
+            throw new Error('Both text extraction and OCR failed');
         }
     }
 
     extractKeywords(text) {
-        if (!text) return [];
-        
-        const aquacultureKeywords = [
-            'anker', 'anchor', 'sjakkel', 'shackle', 'kjetting', 'chain', 
-            'trosse', 'rope', 'bøye', 'buoy', 'spleis', 'splice',
-            'fortøyning', 'mooring', 'line', 'posisjon', 'position',
-            'tonn', 'ton', 'meter', 'kg', 'diameter', 'lengde', 'length'
+        const keywords = [
+            'fortøyning', 'mooring', 'anchor', 'anker', 'ploganker',
+            'sjakkel', 'shackle', 'kjetting', 'chain', 'trosse', 'rope',
+            'tau', 'wire', 'kause', 'thimble', 'bøye', 'buoy'
         ];
         
-        const foundKeywords = [];
-        const lowerText = text.toLowerCase();
-        
-        aquacultureKeywords.forEach(keyword => {
-            const regex = new RegExp(`\\b${keyword}\\b`, 'gi');
-            const matches = lowerText.match(regex);
-            if (matches) {
-                foundKeywords.push({
-                    keyword: keyword,
-                    count: matches.length
-                });
-            }
-        });
-        
-        return foundKeywords;
+        return keywords.filter(keyword => 
+            new RegExp(keyword, 'i').test(text)
+        );
     }
 
-    findPossibleComponents(text) {
-        if (!text) return [];
-        
-        const components = [];
-        const lines = text.split('\n');
-        
-        lines.forEach((line, lineIndex) => {
-            const lowerLine = line.toLowerCase();
-            
-            if (lowerLine.includes('anker') || lowerLine.includes('anchor')) {
-                components.push({
-                    type: 'anchor',
-                    description: line.trim(),
-                    lineNumber: lineIndex + 1,
-                    confidence: 0.8
-                });
-            }
-            
-            if (lowerLine.includes('sjakkel') || lowerLine.includes('shackle')) {
-                components.push({
-                    type: 'shackle',
-                    description: line.trim(),
-                    lineNumber: lineIndex + 1,
-                    confidence: 0.8
-                });
-            }
-            
-            if (lowerLine.includes('kjetting') || lowerLine.includes('chain')) {
-                components.push({
-                    type: 'chain',
-                    description: line.trim(),
-                    lineNumber: lineIndex + 1,
-                    confidence: 0.8
-                });
-            }
-            
-            if (lowerLine.includes('trosse') || lowerLine.includes('rope')) {
-                components.push({
-                    type: 'rope',
-                    description: line.trim(),
-                    lineNumber: lineIndex + 1,
-                    confidence: 0.8
-                });
-            }
-            
-            if (lowerLine.includes('bøye') || lowerLine.includes('buoy')) {
-                components.push({
-                    type: 'buoy',
-                    description: line.trim(),
-                    lineNumber: lineIndex + 1,
-                    confidence: 0.8
-                });
-            }
-        });
-        
-        return components;
-    }
-
-    findPossibleMooringLines(text) {
-        if (!text) return [];
-        
+    findMooringLineReferences(text) {
         const mooringLines = [];
+        
+        // Comprehensive patterns for mooring line references
         const patterns = [
-            /line\s*(\d+[a-z]?)/gi,
-            /linje\s*(\d+[a-z]?)/gi,
+            /line\s+(\d+[a-z]?)/gi,
+            /linje\s+(\d+[a-z]?)/gi,
             /(\d+[a-z]?)\s*line/gi,
             /posisjon\s*(\d+[a-z]?)/gi,
             /position\s*(\d+[a-z]?)/gi,
-            /[HS]\d{2}[AB]?/gi
+            /[HS]\d{2}[AB]?/gi,
+            /langsgående/gi,
+            /tverrgående/gi,
+            /kf-ho|ko-kn|kn-km/gi
         ];
         
         patterns.forEach(pattern => {
@@ -386,27 +249,25 @@ class FileProcessor {
         results.forEach(result => {
             if (result.success) {
                 const data = result.data;
-                if (data.possibleComponents) {
-                    summary.totalComponents += data.possibleComponents.length;
+                
+                // Count file-level components
+                if (data.totalComponents) {
+                    summary.totalComponents += data.totalComponents;
                 }
-                if (data.possibleMooringLines) {
-                    summary.totalMooringLines += data.possibleMooringLines.length;
-                }
-                if (data.sheets) {
-                    data.sheets.forEach(sheet => {
-                        summary.totalComponents += sheet.possibleComponents?.length || 0;
-                        summary.totalMooringLines += sheet.possibleMooringLines?.length || 0;
-                    });
-                }
-
+                
+                // Count AI extracted components
                 if (result.aiExtraction && result.aiExtraction.success) {
                     const aiData = result.aiExtraction.data;
-                    summary.aiComponentsFound += aiData.component_groups?.reduce((sum, group) => sum + (group.components?.length || 0), 0) || 0;
-                    summary.aiPositionsFound += aiData.component_groups?.length || 0;
+                    if (aiData.component_groups) {
+                        summary.aiPositionsFound += aiData.component_groups.length;
+                        aiData.component_groups.forEach(group => {
+                            summary.aiComponentsFound += group.components?.length || 0;
+                        });
+                    }
                 }
             } else {
                 summary.errors.push({
-                    file: result.fileName,
+                    fileName: result.fileName,
                     error: result.error
                 });
             }
@@ -417,7 +278,7 @@ class FileProcessor {
 
     validateFileSupport(filePath) {
         const ext = path.extname(filePath).toLowerCase();
-        return this.supportedFormats.includes(ext);
+        return this.supportedFileTypes.includes(ext);
     }
 }
 

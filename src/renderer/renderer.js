@@ -195,45 +195,73 @@ function setupPositionMapping() {
 }
 
 function initializePositionMapper() {
-    const mappingArea = document.getElementById('mappingArea');
-    if (!mappingArea) return;
+    console.log('Initializing position mapper...');
     
-    mappingArea.innerHTML = `
-        <div class="position-mapper">
-            <div class="mapper-header">
-                <h3>Setup Position Mapping</h3>
-                <p>Map document references to internal positions</p>
-            </div>
-            
-            <div class="facility-config">
-                <h4>Configure Facility</h4>
-                <div class="config-row">
-                    <label>Mooring Lines:</label>
-                    <input type="number" id="mooringLinesCount" value="8" min="1" max="20">
+    const mappingArea = document.getElementById('mappingArea');
+    if (!mappingArea) {
+        console.error('mappingArea element not found');
+        showError('Position mapping interface not found');
+        return;
+    }
+    
+    try {
+        mappingArea.innerHTML = `
+            <div class="position-mapper">
+                <div class="mapper-header">
+                    <h3>🗺️ Setup Position Mapping</h3>
+                    <p>Map document references to internal positions for your facility</p>
                 </div>
-                <div class="config-row">
-                    <label>Buoys:</label>
-                    <input type="number" id="buoysCount" value="4" min="1" max="10">
+                
+                <div class="facility-config">
+                    <h4>📋 Configure Facility Layout</h4>
+                    <div class="config-grid">
+                        <div class="config-row">
+                            <label>Mooring Lines:</label>
+                            <input type="number" id="mooringLinesCount" value="8" min="1" max="20">
+                        </div>
+                        <div class="config-row">
+                            <label>Anchor Points:</label>
+                            <input type="number" id="anchorsCount" value="8" min="1" max="20">
+                        </div>
+                        <div class="config-row">
+                            <label>Buoys:</label>
+                            <input type="number" id="buoysCount" value="4" min="1" max="10">
+                        </div>
+                    </div>
+                    <button onclick="generatePositions()" class="btn-secondary" style="margin-top: 1rem;">
+                        🏗️ Generate Position Template
+                    </button>
                 </div>
-                <div class="config-row">
-                    <label>Bridles:</label>
-                    <input type="number" id="bridlesCount" value="4" min="1" max="10">
+                
+                <div id="positionMappings" class="position-mappings">
+                    <h4>🎯 Position Mappings</h4>
+                    <p class="mapping-help">
+                        Map document references (like "KF-HO", "LANGSGÅENDE", "1a") to internal position numbers.
+                    </p>
+                    <div id="mappingsList"></div>
+                    <button onclick="addCustomMapping()" class="btn-secondary" style="margin-top: 1rem;">
+                        ➕ Add Custom Mapping
+                    </button>
                 </div>
-                <button onclick="generatePositions()" class="btn-secondary">Generate Positions</button>
+                
+                <div class="mapping-actions" style="margin-top: 2rem; display: flex; gap: 1rem; justify-content: center;">
+                    <button onclick="saveMappings()" class="btn-primary">💾 Save Mappings</button>
+                    <button onclick="backToUpload()" class="btn-secondary">⬅️ Back to Upload</button>
+                </div>
             </div>
-            
-            <div id="positionMappings" class="position-mappings">
-                <h4>Position Mappings</h4>
-                <div id="mappingsList"></div>
-                <button onclick="addCustomMapping()" class="btn-secondary">Add Custom Mapping</button>
-            </div>
-            
-            <div class="mapping-actions">
-                <button onclick="saveMappings()" class="btn-primary">Save Mappings</button>
-                <button onclick="backToUpload()" class="btn-secondary">Back to Upload</button>
-            </div>
-        </div>
-    `;
+        `;
+        
+        console.log('Position mapper initialized successfully');
+        
+        // Pre-generate some positions for testing
+        setTimeout(() => {
+            generatePositions();
+        }, 100);
+        
+    } catch (error) {
+        console.error('Error initializing position mapper:', error);
+        showError('Failed to initialize position mapping interface: ' + error.message);
+    }
 }
 
 function generatePositions() {

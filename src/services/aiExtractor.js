@@ -2,57 +2,53 @@ const OpenAI = require('openai');
 require('dotenv').config();
 const logger = require('../utils/logger');
 
-class AIExtractor {
+class ComprehensiveAIExtractor {
     constructor() {
         this.client = new OpenAI({
             apiKey: process.env.OPENAI_API_KEY,
-            dangerouslyAllowBrowser: true // Required for Electron
+            dangerouslyAllowBrowser: true
         });
         this.model = process.env.AI_MODEL || 'gpt-4o-mini';
     }
 
     async extractComponents(fileData, positionMappings = []) {
         try {
-            const extractionPrompt = this.buildExtractionPrompt(fileData, positionMappings);
-            
-            logger.info('Starting AI extraction', {
+            logger.info('Starting comprehensive AI extraction', {
                 fileType: fileData.type,
                 fileName: fileData.fileName,
                 mappingCount: positionMappings.length
             });
 
-            const response = await this.client.chat.completions.create({
-                model: this.model,
-                messages: [
-                    {
-                        role: "system",
-                        content: this.getSystemPrompt()
-                    },
-                    {
-                        role: "user", 
-                        content: extractionPrompt
-                    }
-                ],
-                temperature: 0.1,
-                max_tokens: 4000
-            });
+            let allExtractedData = {
+                document_info: {
+                    filename: fileData.fileName,
+                    type: fileData.type,
+                    processed_at: new Date().toISOString()
+                },
+                component_groups: []
+            };
 
-            const extractedData = this.parseAIResponse(response.choices[0].message.content);
-            
-            logger.info('AI extraction completed', {
-                componentsFound: extractedData.component_groups?.length || 0,
-                totalComponents: extractedData.component_groups?.reduce((sum, group) => sum + group.components.length, 0) || 0
+            // Process based on file type
+            if (fileData.type === 'excel') {
+                allExtractedData = await this.processExcelSystematically(fileData);
+            } else if (fileData.type === 'pdf') {
+                allExtractedData = await this.processPDFSystematically(fileData);
+            }
+
+            logger.info('Comprehensive AI extraction completed', {
+                totalPositions: allExtractedData.component_groups?.length || 0,
+                totalComponents: allExtractedData.component_groups?.reduce((sum, group) => sum + (group.components?.length || 0), 0) || 0
             });
 
             return {
                 success: true,
-                data: extractedData,
-                rawResponse: response.choices[0].message.content,
-                usage: response.usage
+                data: allExtractedData,
+                rawData: fileData,
+                usage: null
             };
 
         } catch (error) {
-            logger.error('AI extraction failed', error);
+            logger.error('Comprehensive AI extraction failed', error);
             return {
                 success: false,
                 error: error.message,
@@ -61,120 +57,263 @@ class AIExtractor {
         }
     }
 
-    getSystemPrompt() {
-        return `You are an expert in extracting Norwegian aquaculture mooring system data from technical documents.
+    async processExcelSystematically(fileData) {
+        const extractedData = {
+            document_info: {
+                filename: fileData.fileName,
+                type: 'excel',
+                sheets_processed: []
+            },
+            component_groups: []
+        };
 
-Your task is to analyze technical documents and extract structured mooring component information.
+        // Process each sheet systematically
+        if (fileData.sheets && Array.isArray(fileData.sheets)) {
+            for (const sheet of fileData.sheets) {
+                logger.info(`Processing sheet: ${sheet.name} with ${sheet.possibleComponents?.length || 0} components`);
+                
+                const sheetComponents = await this.processExcelSheet(sheet);
+                extractedData.component_groups.push(...sheetComponents);
+                
+                extractedData.document_info.sheets_processed.push({
+                    name: sheet.name,
+                    components_found: sheetComponents.length,
+                    total_rows: sheet.possibleComponents?.length || 0
+                });
+            }
+        }
 
-Key Norwegian/Technical Terms to Recognize:
-- "Bunnfortøyning" = Bottom mooring/anchoring
-- "Line" followed by numbers/letters (e.g. "1a", "2b", "11c") = Mooring line references  
-- "Anker" = Anchor
-- "Sjakkel" = Shackle  
-- "Ankerkjetting" = Anchor chain
-- "Trosse" = Rope/line
-- "kause" = Thimble/eye splice
-- "Bøye" = Buoy
-- "spleis" = Splice
-- "PANTHER TRÅLKULE" = Trawl float/buoy
+        // Also process any top-level components
+        if (fileData.possibleComponents && Array.isArray(fileData.possibleComponents)) {
+            const topLevelComponents = await this.processComponentList(fileData.possibleComponents, 'Main');
+            extractedData.component_groups.push(...topLevelComponents);
+        }
 
-Expected JSON Output Structure:
+        return extractedData;
+    }
+
+    async processExcelSheet(sheet) {
+        if (!sheet.possibleComponents || sheet.possibleComponents.length === 0) {
+            return [];
+        }
+
+        logger.info(`Systematically processing ${sheet.possibleComponents.length} components from sheet ${sheet.name}`);
+        
+        // Group components by position (first part before |)
+        const positionGroups = {};
+        
+        sheet.possibleComponents.forEach((component, index) => {
+            try {
+                // Extract position from component text
+                // Expected format: "H01A | 1 | Component Type | Description"
+                const parts = component.split('|').map(p => p.trim());
+                
+                if (parts.length >= 3) {
+                    const position = parts[0]; // e.g., "H01A", "K01"
+                    const sequence = parts[1]; // e.g., "1", "2", "3"
+                    const componentType = parts[2]; // e.g., "Ploganker", "Sjakkel"
+                    const description = parts[3] || ''; // e.g., "Softanker 1700 kg"
+                    
+                    if (!positionGroups[position]) {
+                        positionGroups[position] = [];
+                    }
+                    
+                    // Parse the component systematically
+                    const parsedComponent = this.parseComponentSystematically(componentType, description, sequence);
+                    positionGroups[position].push(parsedComponent);
+                }
+            } catch (error) {
+                logger.error(`Error parsing component ${index}:`, error);
+            }
+        });
+
+        // Convert position groups to component groups
+        const componentGroups = [];
+        
+        Object.keys(positionGroups).forEach(position => {
+            componentGroups.push({
+                document_reference: position,
+                position_type: this.classifyPositionType(position),
+                components: positionGroups[position],
+                total_components: positionGroups[position].length,
+                sheet_source: sheet.name
+            });
+        });
+
+        logger.info(`Extracted ${componentGroups.length} position groups from sheet ${sheet.name}`);
+        
+        return componentGroups;
+    }
+
+    parseComponentSystematically(componentType, description, sequence) {
+        // Systematic parsing of component data
+        const component = {
+            sequence: parseInt(sequence) || 0,
+            type: this.normalizeComponentType(componentType),
+            description: description || componentType,
+            quantity: 1, // Default quantity
+            specifications: {},
+            manufacturer: '',
+            part_number: '',
+            confidence: 0.95 // High confidence for systematic parsing
+        };
+
+        // Extract specifications from description
+        if (description) {
+            // Extract weight (kg)
+            const weightMatch = description.match(/(\d+(?:\.\d+)?)\s*kg/i);
+            if (weightMatch) {
+                component.specifications.weight_kg = parseFloat(weightMatch[1]);
+            }
+
+            // Extract length (m, mm)
+            const lengthMatch = description.match(/(\d+(?:\.\d+)?)\s*m(?:\s|$)/i);
+            if (lengthMatch) {
+                component.specifications.length_m = parseFloat(lengthMatch[1]);
+            }
+
+            // Extract diameter (mm)
+            const diameterMatch = description.match(/(\d+(?:\.\d+)?)\s*mm/i);
+            if (diameterMatch) {
+                component.specifications.diameter_mm = parseFloat(diameterMatch[1]);
+            }
+
+            // Extract part numbers (patterns like G1463, GAP-GBA, etc.)
+            const partNumberMatch = description.match(/([A-Z]+[-]?[A-Z0-9]+)(?:\s|$)/);
+            if (partNumberMatch) {
+                component.part_number = partNumberMatch[1];
+            }
+        }
+
+        return component;
+    }
+
+    normalizeComponentType(type) {
+        const typeMapping = {
+            'ploganker': 'anchor',
+            'anker': 'anchor',
+            'sjakkel': 'shackle',
+            'kjetting': 'chain',
+            'trosse': 'rope',
+            'tau': 'rope',
+            'wire': 'wire',
+            'kause': 'thimble',
+            'koblingspunkt': 'connector',
+            'koblingsskive': 'connector',
+            'fortøyningsline': 'mooring_line'
+        };
+
+        const normalized = type.toLowerCase().trim();
+        return typeMapping[normalized] || normalized;
+    }
+
+    classifyPositionType(position) {
+        // Classify position based on prefix
+        if (position.startsWith('H')) return 'mooring_line';
+        if (position.startsWith('K')) return 'connector_point';
+        if (position.startsWith('A')) return 'anchor_point';
+        if (position.startsWith('B')) return 'buoy';
+        return 'unknown';
+    }
+
+    async processPDFSystematically(fileData) {
+        // For PDF files, we still need AI to understand complex layouts
+        // But we make multiple focused extraction passes
+        
+        const extractedData = {
+            document_info: {
+                filename: fileData.fileName,
+                type: 'pdf',
+                pages: fileData.pageCount || 0
+            },
+            component_groups: []
+        };
+
+        // Extract text content
+        let textContent = '';
+        if (fileData.text) {
+            textContent = fileData.text;
+        } else if (fileData.pages && Array.isArray(fileData.pages)) {
+            textContent = fileData.pages.join('\n\n');
+        }
+
+        if (!textContent) {
+            throw new Error('No text content found in PDF');
+        }
+
+        // Use AI for PDF processing with systematic prompts
+        const componentGroups = await this.extractPDFComponentsWithAI(textContent);
+        extractedData.component_groups = componentGroups;
+
+        return extractedData;
+    }
+
+    async extractPDFComponentsWithAI(textContent) {
+        const prompt = `
+Analyze this Norwegian aquaculture mooring document and extract ALL components systematically.
+
+Document content:
+${textContent.substring(0, 8000)} // Limit for token usage
+
+Instructions:
+1. Find EVERY component table, list, or specification
+2. Extract ALL positions/references (like "1a", "2b", "LANGSGÅENDE", "TVERSÅENDE", "KF-HO", etc.)
+3. For each position, list ALL components with specifications
+4. Include quantities, dimensions, part numbers, manufacturers
+5. Don't skip anything - be comprehensive
+
+Return JSON format:
 {
-  "document_info": {
-    "supplier": "detected supplier name",
-    "document_id": "document number/reference", 
-    "date": "date if found",
-    "facility_reference": "facility name from document"
-  },
   "component_groups": [
     {
-      "document_reference": "EXACT reference as written (e.g. '1a', '2b', '11c', 'Line 4')",
-      "reference_type": "line/position/group identifier type",
-      "description": "any descriptive text about this position/line",
+      "document_reference": "position_code",
+      "position_type": "mooring_line|anchor|buoy|frame",
       "components": [
         {
-          "sequence": "number (order in document)",
-          "type": "component type (anchor, chain, rope, shackle, buoy, etc.)",
-          "description": "full original description",
-          "quantity": "number",
+          "sequence": 1,
+          "type": "anchor|rope|chain|shackle|connector",
+          "description": "full description",
+          "quantity": 1,
           "specifications": {
-            "length_m": "number or null",
-            "diameter_mm": "number or null", 
-            "weight_kg": "number or null",
-            "breaking_strength_kg": "number or null",
-            "material": "string or null"
+            "length_m": 10.5,
+            "diameter_mm": 30,
+            "weight_kg": 1700
           },
-          "manufacturer": "extracted manufacturer name",
-          "part_number": "part/model number",
-          "notes": "any additional details",
-          "confidence": "extraction confidence 0.0-1.0"
+          "manufacturer": "company_name",
+          "part_number": "part_code",
+          "confidence": 0.9
         }
       ]
     }
   ]
 }
 
-CRITICAL REQUIREMENTS:
-1. Extract EVERY component found, even if uncertain
-2. Preserve document references EXACTLY as written  
-3. Group components by their document position/line reference
-4. Don't try to convert references to internal numbers
-5. Extract all technical specifications found
-6. Identify component types using standard terms: anchor, chain, rope, shackle, buoy, thimble, splice, connector, clamp, swivel
+Be systematic - extract EVERYTHING, not just samples.`;
 
-Return only valid JSON.`;
-    }
-
-    buildExtractionPrompt(fileData, positionMappings) {
-        let prompt = `Extract aquaculture mooring components from this document:
-
-FILE: ${fileData.fileName}
-TYPE: ${fileData.type}
-
-`;
-
-        if (positionMappings.length > 0) {
-            prompt += `POSITION MAPPINGS REFERENCE:
-${positionMappings.map(m => `- Document ref "${m.documentReference}" → Internal position ${m.internalPosition}`).join('\n')}
-
-`;
-        }
-
-        if (fileData.type === 'pdf') {
-            prompt += `DOCUMENT TEXT:
-${fileData.text}
-
-KEYWORDS FOUND: ${fileData.keywords?.map(k => k.keyword).join(', ') || 'None'}
-
-`;
-        }
-
-        if (fileData.type === 'excel' && fileData.sheets) {
-            prompt += `EXCEL SHEETS:
-`;
-            fileData.sheets.forEach(sheet => {
-                prompt += `
-Sheet: ${sheet.name} (${sheet.rowCount} rows, ${sheet.columnCount} columns)
-Headers: ${sheet.headers?.join(', ') || 'No headers detected'}
-
-Sample Data (first 5 rows):
-${JSON.stringify(sheet.objectData?.slice(0, 5), null, 2)}
-`;
+        try {
+            const response = await this.client.chat.completions.create({
+                model: this.model,
+                messages: [
+                    {
+                        role: "system",
+                        content: "You are a systematic data extraction specialist for Norwegian aquaculture documents. Extract ALL data comprehensively, never skip components."
+                    },
+                    {
+                        role: "user",
+                        content: prompt
+                    }
+                ],
+                temperature: 0.1,
+                max_tokens: 4000
             });
+
+            const result = this.parseAIResponse(response.choices[0].message.content);
+            return result.component_groups || [];
+
+        } catch (error) {
+            logger.error('PDF AI extraction failed', error);
+            return [];
         }
-
-        prompt += `
-Focus on extracting:
-1. All component tables with position/quantity/description columns
-2. Line group references (e.g. "1a", "2b", "11c")
-3. Component specifications and part numbers
-4. Length details for ropes/chains
-5. Facility and supplier information from header
-
-Pay special attention to Norwegian terminology and document format.
-Return structured JSON only.`;
-
-        return prompt;
     }
 
     parseAIResponse(responseText) {
@@ -185,98 +324,34 @@ Return structured JSON only.`;
                 throw new Error('No JSON found in AI response');
             }
 
-            const extractedData = JSON.parse(jsonMatch[0]);
-            
-            // Validate structure
-            if (!extractedData.component_groups || !Array.isArray(extractedData.component_groups)) {
-                throw new Error('Invalid response structure: missing component_groups array');
-            }
-
-            return this.validateAndCleanData(extractedData);
+            return JSON.parse(jsonMatch[0]);
 
         } catch (error) {
-            logger.error('Failed to parse AI response', { error: error.message, responseText });
+            logger.error('Failed to parse AI response', { error: error.message });
             throw new Error(`AI response parsing failed: ${error.message}`);
         }
     }
 
-    validateAndCleanData(data) {
-        const cleaned = {
-            document_info: data.document_info || {},
-            component_groups: []
-        };
+    async testConnection() {
+        try {
+            const response = await this.client.chat.completions.create({
+                model: this.model,
+                messages: [{ role: 'user', content: 'Test connection. Respond with "OK".' }],
+                max_tokens: 10
+            });
 
-        // Validate and clean each component group
-        data.component_groups.forEach(group => {
-            const cleanedGroup = {
-                document_reference: group.document_reference || 'unknown',
-                reference_type: group.reference_type || 'unknown',
-                description: group.description || '',
-                components: []
+            return {
+                success: true,
+                model: this.model,
+                response: response.choices[0].message.content
             };
-
-            if (group.components && Array.isArray(group.components)) {
-                group.components.forEach(component => {
-                    const cleanedComponent = {
-                        sequence: this.parseNumber(component.sequence) || 1,
-                        type: this.standardizeComponentType(component.type),
-                        description: component.description || '',
-                        quantity: this.parseNumber(component.quantity) || 1,
-                        specifications: {
-                            length_m: this.parseNumber(component.specifications?.length_m),
-                            diameter_mm: this.parseNumber(component.specifications?.diameter_mm),
-                            weight_kg: this.parseNumber(component.specifications?.weight_kg),
-                            breaking_strength_kg: this.parseNumber(component.specifications?.breaking_strength_kg),
-                            material: component.specifications?.material
-                        },
-                        manufacturer: component.manufacturer || null,
-                        part_number: component.part_number || null,
-                        notes: component.notes || null,
-                        confidence: Math.min(Math.max(this.parseNumber(component.confidence) || 0.7, 0), 1)
-                    };
-
-                    cleanedGroup.components.push(cleanedComponent);
-                });
-            }
-
-            cleaned.component_groups.push(cleanedGroup);
-        });
-
-        return cleaned;
-    }
-
-    standardizeComponentType(type) {
-        if (!type) return 'unknown';
-        
-        const typeMap = {
-            'anker': 'anchor',
-            'sjakkel': 'shackle', 
-            'ankerkjetting': 'chain',
-            'kjetting': 'chain',
-            'trosse': 'rope',
-            'kause': 'thimble',
-            'bøye': 'buoy',
-            'spleis': 'splice',
-            'trålkule': 'trawl_float',
-            'wire': 'wire',
-            'tau': 'rope'
-        };
-
-        const lowerType = type.toLowerCase();
-        for (const [norwegian, english] of Object.entries(typeMap)) {
-            if (lowerType.includes(norwegian)) {
-                return english;
-            }
+        } catch (error) {
+            return {
+                success: false,
+                error: error.message
+            };
         }
-        
-        return type.toLowerCase();
-    }
-
-    parseNumber(value) {
-        if (value === null || value === undefined || value === '') return null;
-        const num = parseFloat(value);
-        return isNaN(num) ? null : num;
     }
 }
 
-module.exports = AIExtractor;
+module.exports = ComprehensiveAIExtractor;
