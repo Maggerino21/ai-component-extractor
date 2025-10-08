@@ -4,11 +4,13 @@ const pdfParse = require('pdf-parse');
 const XLSX = require('xlsx');
 const Tesseract = require('tesseract.js');
 const AzureDocumentExtractor = require('./azureDocumentExtractor');
+const GPTExcelEnhancer = require('./gptExcelEnhancer');
 const logger = require('../utils/logger');
 
 class FileProcessor {
     constructor() {
-        this.aiExtractor = new AzureDocumentExtractor();
+        this.azureExtractor = new AzureDocumentExtractor();
+        this.gptExcelEnhancer = new GPTExcelEnhancer();
         this.supportedFileTypes = ['.pdf', '.xlsx', '.xls'];
     }
 
@@ -48,21 +50,21 @@ class FileProcessor {
         }
         
         let fileData;
+        let aiExtraction;
         
-        // Process based on file type
         if (fileType === '.pdf') {
             fileData = await this.processPDF(filePath);
+            logger.info('Using Azure Document Intelligence for PDF');
+            aiExtraction = await this.azureExtractor.extractComponents(fileData, positionMappings);
         } else if (['.xlsx', '.xls'].includes(fileType)) {
             fileData = await this.processExcel(filePath);
+            logger.info('Using GPT-4o-mini for Excel enhancement');
+            aiExtraction = await this.gptExcelEnhancer.enhanceExcelData(fileData, positionMappings);
         }
         
-        // Add file metadata
         fileData.fileName = fileName;
         fileData.filePath = filePath;
         fileData.fileType = fileType;
-        
-        // Comprehensive AI extraction
-        const aiExtraction = await this.aiExtractor.extractComponents(fileData, positionMappings);
         
         return {
             fileName,
@@ -80,7 +82,6 @@ class FileProcessor {
         const sheets = [];
         let totalComponents = 0;
         
-        // Process each sheet systematically
         workbook.SheetNames.forEach(sheetName => {
             console.log(`Processing sheet: ${sheetName}`);
             
@@ -89,20 +90,15 @@ class FileProcessor {
             
             console.log(`Parsing ${jsonData.length} rows from sheet ${sheetName}`);
             
-            // Extract ALL possible components systematically
             const possibleComponents = [];
             
             jsonData.forEach((row, rowIndex) => {
                 if (Array.isArray(row) && row.length >= 3) {
-                    // Look for patterns like: Position | Sequence | Type | Description
                     const rowText = row.filter(cell => cell !== null && cell !== undefined && cell !== '').join(' | ');
                     
-                    if (rowText.trim()) {
-                        // Check if this looks like a component row
-                        if (this.isLikelyComponentRow(rowText)) {
-                            possibleComponents.push(rowText);
-                            console.log(`Found component: ${rowText}`);
-                        }
+                    if (rowText.trim() && this.isLikelyComponentRow(rowText)) {
+                        possibleComponents.push(rowText);
+                        console.log(`Found component: ${rowText}`);
                     }
                 }
             });
@@ -114,7 +110,7 @@ class FileProcessor {
                 name: sheetName,
                 rowCount: jsonData.length,
                 possibleComponents: possibleComponents,
-                rawData: jsonData.slice(0, 10) // Keep first 10 rows for reference
+                rawData: jsonData.slice(0, 10)
             });
         });
         
@@ -123,24 +119,18 @@ class FileProcessor {
             totalSheets: sheets.length,
             totalComponents: totalComponents,
             sheets: sheets,
-            possibleComponents: [] // Top-level components if any
+            possibleComponents: []
         };
     }
 
     isLikelyComponentRow(rowText) {
-        // More comprehensive detection of component rows
         const componentIndicators = [
-            // Norwegian terms
             /sjakkel|ploganker|anker|kjetting|trosse|tau|wire|kause/i,
             /fortøyning|mooring|anchor|chain|rope|shackle|connector/i,
-            // Position patterns
-            /^[A-Z]\d{2}[A-Z]?\s*\|/i,  // H01A |, K01 |, etc.
-            /^[A-Z]+\d+\s*\|/i,         // General pattern
-            // Sequential numbers
-            /\|\s*\d+\s*\|/,            // | 1 |, | 2 |, etc.
-            // Part numbers
-            /\d{4,}/,                   // 4+ digit numbers (part numbers)
-            // Norwegian component types
+            /^[A-Z]\d{2}[A-Z]?\s*\|/i,
+            /^[A-Z]+\d+\s*\|/i,
+            /\|\s*\d+\s*\|/,
+            /\d{4,}/,
             /koblingspunkt|koblingsskive/i
         ];
         
@@ -153,11 +143,9 @@ class FileProcessor {
         let extractionMethod = 'text';
         
         try {
-            // Try text extraction first
             parsedData = await pdfParse(buffer);
         } catch (error) {
             logger.warn('PDF text extraction failed, trying OCR', error);
-            // Fallback to OCR if text extraction fails
             parsedData = await this.extractPDFWithOCR(buffer);
             extractionMethod = 'ocr';
         }
@@ -182,7 +170,7 @@ class FileProcessor {
             
             return {
                 text: result.data.text,
-                numpages: 1 // OCR typically processes as single page
+                numpages: 1
             };
         } catch (error) {
             logger.error('OCR extraction failed', error);
@@ -205,7 +193,6 @@ class FileProcessor {
     findMooringLineReferences(text) {
         const mooringLines = [];
         
-        // Comprehensive patterns for mooring line references
         const patterns = [
             /line\s+(\d+[a-z]?)/gi,
             /linje\s+(\d+[a-z]?)/gi,
@@ -243,6 +230,8 @@ class FileProcessor {
             totalMooringLines: 0,
             aiComponentsFound: 0,
             aiPositionsFound: 0,
+            totalCost: 0,
+            totalTokens: 0,
             errors: []
         };
 
@@ -250,12 +239,10 @@ class FileProcessor {
             if (result.success) {
                 const data = result.data;
                 
-                // Count file-level components
                 if (data.totalComponents) {
                     summary.totalComponents += data.totalComponents;
                 }
                 
-                // Count AI extracted components
                 if (result.aiExtraction && result.aiExtraction.success) {
                     const aiData = result.aiExtraction.data;
                     if (aiData.component_groups) {
@@ -263,6 +250,11 @@ class FileProcessor {
                         aiData.component_groups.forEach(group => {
                             summary.aiComponentsFound += group.components?.length || 0;
                         });
+                    }
+                    
+                    if (aiData.metadata) {
+                        summary.totalCost += aiData.metadata.estimated_cost || 0;
+                        summary.totalTokens += aiData.metadata.tokens_used || 0;
                     }
                 }
             } else {
