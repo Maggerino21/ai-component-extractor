@@ -23,8 +23,26 @@ class GPTExcelEnhancer {
             let totalTokensUsed = 0;
             let estimatedCost = 0;
 
+            // Sheets to skip - these are not used in the program
+            const sheetsToSkip = [
+                'not_flytekrage',
+                'flytekrage',
+                'bunnringsoppheng',
+                'not',
+                'ekstra'
+            ];
+
             if (fileData.sheets && Array.isArray(fileData.sheets)) {
                 for (const sheet of fileData.sheets) {
+                    // Check if sheet should be skipped
+                    const sheetNameLower = sheet.name.toLowerCase();
+                    const shouldSkip = sheetsToSkip.some(skipName => sheetNameLower.includes(skipName));
+                    
+                    if (shouldSkip) {
+                        logger.info(`Skipping sheet: ${sheet.name} (not used in program)`);
+                        continue;
+                    }
+
                     if (sheet.possibleComponents && sheet.possibleComponents.length > 0) {
                         logger.info(`Processing sheet: ${sheet.name} with ${sheet.possibleComponents.length} components`);
                         
@@ -41,7 +59,7 @@ class GPTExcelEnhancer {
                 totalPositions: allComponentGroups.length,
                 totalComponents: allComponentGroups.reduce((sum, g) => sum + (g.components?.length || 0), 0),
                 tokensUsed: totalTokensUsed,
-                estimatedCost: `$${estimatedCost.toFixed(4)}`
+                estimatedCost: `${estimatedCost.toFixed(4)}`
             });
 
             return {
@@ -75,7 +93,7 @@ class GPTExcelEnhancer {
 
     async processSheetWithGPT(sheet, fileName) {
         const componentStrings = sheet.possibleComponents;
-        const batchSize = 300; // Can be larger now with Tier 2
+        const batchSize = 500; // iNTERCHANGEABLE BASED ON USAGE PATTERNS AND TOKEN LIMITS!!!
         const batches = this.createBatches(componentStrings, batchSize);
         
         let allComponentGroups = [];
@@ -84,9 +102,9 @@ class GPTExcelEnhancer {
         for (let i = 0; i < batches.length; i++) {
             logger.info(`Processing batch ${i + 1}/${batches.length} for sheet ${sheet.name}`);
             
-            // Small delay to be safe (optional - can remove if you want max speed)
+            // Minimal delay - we have 450k TPM limit now or something
             if (i > 0) {
-                await new Promise(resolve => setTimeout(resolve, 2000)); // 2 seconds instead of 10
+                await new Promise(resolve => setTimeout(resolve, 1000));
             }
             
             const result = await this.processBatchWithGPT(batches[i], sheet.name, fileName);
@@ -122,41 +140,69 @@ FILE: ${fileName}
 SHEET: ${sheetName}
 TOTAL COMPONENTS IN THIS BATCH: ${componentStrings.length}
 
-RAW SAMPLE DATA (pipe-separated fields):
+RAW SAMPLE DATA (pipe-separated fields - NOTE: Empty fields are omitted, so field positions vary!):
 ${sampleComponents.map((c, i) => `${i + 1}. ${c}`).join('\n')}
 
-STEP 1: COLUMN STRUCTURE ANALYSIS
-Look at the sample data above. Each row has fields separated by " | ". 
-Count the fields and identify what each position contains by looking at ALL samples.
+CRITICAL UNDERSTANDING: Field positions are NOT consistent! Empty Excel cells are omitted from the pipe-separated data.
 
-Based on a typical pattern like:
-"H01A | 1 | Ploganker | Softanker 1700 kg | | 606616 | AQS TOR | 12T | 20MIN"
+EXAMPLE:
+Row with all fields: "H01A | 1 | Ploganker | Softanker 1700 kg | 606616 | AQS TOR | 12T | 20MIN"
+Row with empty cells: "H01A | 2 | Sjakkel | Sjakkel 90T | GAP-GBA"
 
-Map out: Field 0 = ?, Field 1 = ?, Field 2 = ?, etc.
+In the second row, "GAP-GBA" might LOOK like it's in the "part number" position, but it's actually a TRACKING number - the part number and manufacturer fields are just empty!
 
-Common patterns:
-- Position reference (H01A, K01) usually in field 0
-- Sequence number (1, 2, 3) usually in field 1  
-- Component type (Ploganker, Sjakkel) usually in field 2
-- Description with specs usually in field 3
-- Empty field or additional info in field 4
-- Part number (numeric like 606616 or alphanumeric like GAP-GBA) in field 5 or 6
-- Manufacturer name (AQS TOR, Scale AQ) appears in one field
-- Tracking codes (GAP-GBA, G1463, 12T) appear in another field
+YOUR TASK: Use CONTENT ANALYSIS, not position analysis:
 
-CRITICAL OBSERVATION: In aquaculture Excel sheets, manufacturer appears ONLY on the FIRST component of each position (the anchor/ploganker), then the field is EMPTY for all other components. You must remember the manufacturer from sequence 1 and apply it to ALL subsequent components in that same position.
+**IDENTIFYING FIELDS BY CONTENT:**
 
-YOUR TASK - Extract components with this logic:
+1. **Position Reference** - Always first field: H01A, H01B, K01, S04, etc.
+2. **Sequence Number** - Always second field: 1, 2, 3, 4...
+3. **Component Type** - Third field: Ploganker, Sjakkel, Kjetting, Tau, Kause, etc.
+4. **Description** - Fourth field: Contains specs like "1700 kg", "90T", "64mm", "30mm"
+5. **After description, analyze remaining fields by CONTENT:**
 
-1. **Skip headers** - Lines like "Fortøyningsline type X.X" are structural descriptions, not components
-2. **Track manufacturer per position** - When you see a manufacturer on sequence 1, remember it for the entire position
-3. **Extract all components** systematically with proper field mapping
+   **Part Number** (Art.nr) - Product catalog number:
+   - Usually all numeric: "606616", "604758", "108192"
+   - Sometimes alphanumeric but looks like product code: "605911-1"
+   - NOT codes with hyphens like GAP-GBA
 
-For each component, return:
+   **Manufacturer/Supplier** - Company names:
+   - Contains company names: "AQS TOR", "Scale AQ", "Aqua Supporter", "Mørenot"
+   - Usually 2+ words or capital letters
+   - Appears ONLY on first component (sequence 1) of each position
+   
+   **Tracking Number** (Sporing) - Installation tracking codes:
+   - Alphanumeric codes: "GAP-GBA", "G1463", "12T", "20MIN", "E11", "DIZ-DKV"
+   - Often has hyphens: "GAP-GBA", "DIZ-DKV", "DAH-DBC"
+   - Single letters + numbers: "E11", "E7", "G1463"
+   - Time-like patterns: "12T", "20MIN"
+   - Appears on EVERY component
+
+**MANUFACTURER INHERITANCE RULE:**
+The manufacturer appears ONLY on the first component (sequence 1) of each position. For ALL other components (seq 2, 3, 4...), you must INHERIT the manufacturer from sequence 1.
+
+Example:
+- H01A seq 1: "H01A | 1 | Ploganker | Softanker 1700 kg | 606616 | AQS TOR | 12T | 20MIN"
+  Result: manufacturer="AQS TOR", tracking="12T"
+
+- H01A seq 2: "H01A | 2 | Sjakkel | Sjakkel 90T | GAP-GBA"
+  Result: manufacturer="AQS TOR" (INHERITED from seq 1), tracking="GAP-GBA"
+  
+- H01A seq 3: "H01A | 3 | Kjetting | Kjetting 30mm | G1463"
+  Result: manufacturer="AQS TOR" (INHERITED from seq 1), tracking="G1463"
+
+**HEADER DETECTION:**
+Skip rows like:
+- "H01A | 1 | Fortøyningsline type 1.2 ploganker" (no actual component details)
+- "Bunnfortøyning type X"
+These are line type descriptions, not actual components.
+
+**OUTPUT FORMAT:**
+For each component, extract:
 {
   "sequence": <number>,
-  "type": "<anchor|shackle|chain|rope|thimble|buoy|connector|swivel|masterlink>",
-  "description": "<full description text>",
+  "type": "<anchor|shackle|chain|rope|thimble|buoy|connector|swivel|masterlink|tbolt>",
+  "description": "<full description>",
   "quantity": <number, default 1>,
   "specifications": {
     "weight_kg": <number or null>,
@@ -164,165 +210,55 @@ For each component, return:
     "diameter_mm": <number or null>,
     "capacity_t": <number or null>
   },
-  "part_number": "<extract from the field that contains product/article numbers>",
-  "manufacturer": "<company name - INHERIT from sequence 1 if not present>",
-  "tracking_number": "<sporing/tracking code - can be alphanumeric like GAP-GBA, G1463, 12T>",
+  "part_number": "<numeric catalog number or null>",
+  "manufacturer": "<company name - from seq 1 OR inherited>",
+  "tracking_number": "<alphanumeric tracking code>",
   "installation_date": "<date if present>",
   "confidence": <0.0-1.0>
 }
 
-CRITICAL FIELD IDENTIFICATION RULES:
-- Part numbers: Usually numeric (606616) or short alphanumeric codes in earlier fields
-- Manufacturer: Company names like "AQS TOR", "Scale AQ" - appears ONLY on first component
-- Tracking numbers: Alphanumeric codes (GAP-GBA, G1463, 12T, 20MIN) - appear on EVERY component
-- If a field on sequence 1 has a company name, that's the manufacturer for the WHOLE position
-- If a field is empty on sequences 2+, but had a value on sequence 1, that's the manufacturer field
-- Tracking codes appear consistently across all sequences in the same field position
+Norwegian → English translations:
+- Ploganker/Anker → anchor
+- Sjakkel → shackle
+- Kjetting → chain
+- Tau/Trosse → rope
+- Kause → thimble
+- Bøye → buoy
+- Koblingsskive → connector
+- Master link → masterlink
+- T-bolt/Forankringsbolt → tbolt
 
-Example logic:
-- H01A seq 1: Field 6="AQS TOR", Field 7="12T" → manufacturer="AQS TOR", tracking="12T"
-- H01A seq 2: Field 6="", Field 7="GAP-GBA" → manufacturer="AQS TOR" (inherited!), tracking="GAP-GBA"
-- H01A seq 3: Field 6="", Field 7="G1463" → manufacturer="AQS TOR" (inherited!), tracking="G1463"
-
-Return ONLY valid JSON in this format:
-STEP 2: DETECT HEADERS VS COMPONENTS
-Headers are structural descriptions, NOT actual components. Skip them!
-Common header patterns:
-- "Fortøyningsline type X" = HEADER (describes the line type)
-- "Bunnfortøyning type X" = HEADER
-- Rows with ONLY position + text but no sequence number = HEADER
-- First row with same position but missing component details = HEADER
-
-Real components have:
-- Position reference + Sequence number + Component type + Description/specs
-- Example: "H01A | 1 | Ploganker | Softanker 1700 kg | 606616"
-
-STEP 3: EXTRACT COMPONENTS
-For each valid component (NOT headers), extract:
-- Position reference (e.g., H01A, K01)
-- Sequence number (1, 2, 3...)
-- Component type (normalize Norwegian → English: ploganker=anchor, sjakkel=shackle, kjetting=chain, trosse/tau=rope, kause=thimble, bøye=buoy)
-- Description (full text with specs)
-- Specifications object:
-  - weight_kg: Extract from patterns like "1700 kg", "1700kg", "1.7T", "1700 kilo"
-  - length_m: Extract from patterns like "27.5m", "27,5 m", "27.5 meter"
-  - diameter_mm: Extract from patterns like "64mm", "64 mm", "ø64", "Ø 64mm"
-  - capacity_t: Extract from patterns like "90T", "90 tonn", "90t"
-- Part number (Art.nr/Varenr - can be numeric or alphanumeric: 606616, GAP-GBA, G1463, AQS-123)
-- Manufacturer (Leverandør/Produsent - company name like "AQS TOR", "Scale AQ")
-- Tracking number (Sporing - **ALPHANUMERIC codes like "GAP-GBA", "12T", "20MIN", "G1463" - these are tracing/tracking codes, NOT part numbers**)
-- Installation date (if present)
-
-IMPORTANT: Tracking numbers (Sporing) are often alphanumeric codes that can include:
-- Letters + hyphens: "GAP-GBA", "GEJ-14698"
-- Numbers + letters: "12T", "20MIN"
-- Mixed formats: "G1463", "D31"
-These are valid tracking numbers even if they contain letters!
-
-CRITICAL RULES:
-- **ANALYZE COLUMN POSITIONS FIRST** - Understand which | separated field contains what data
-- **MANUFACTURER INHERITANCE** - The manufacturer appears ONLY on the first component (anchor), then ALL other components in that position inherit it!
-  - If column 7 has "AQS TOR" on sequence 1, apply "AQS TOR" to ALL components in that position
-  - Only override if a different manufacturer is explicitly stated on a later component (rare!)
-- **DISTINGUISH part_number from tracking_number** - They are different fields!
-  - Part number (Art.nr) = Product identifier from manufacturer (column 6)
-  - Tracking/Sporing = Installation tracking reference (column 8) - **ALPHANUMERIC - can have letters, numbers, hyphens**
-- **TRACKING NUMBERS CAN BE ALPHANUMERIC** - "GAP-GBA", "GEJ-14698", "G1463", "12T", "20MIN" are ALL valid tracking numbers
-- **DON'T CONFUSE tracking with manufacturer** - "GAP-GBA" is tracking (column 8), not manufacturer (column 7)
-- **SKIP ALL HEADERS** - Lines like "Fortøyningsline type X.X" are NOT components
-- **DETECT HEADERS INTELLIGENTLY** - Headers usually lack sequence numbers or detailed specs
-- Start sequence at 1 for the first ACTUAL component (after skipping headers)
-- Each position should have multiple components in sequence
-- Be systematic - extract ALL ${componentStrings.length} components
-- Maintain sequence order within each position
-- Set confidence based on data completeness:
-  - 0.95+ if all fields present and clear
-  - 0.85-0.94 if some fields missing but core data clear (including inherited manufacturer)
-  - 0.70-0.84 if uncertain about interpretation
-  - < 0.70 if very ambiguous
-
-EXAMPLES OF WHAT TO SKIP (HEADERS):
-- "H01A | 1 | Fortøyningsline type 1.2 ploganker | | 01.08.2024" ❌ SKIP - This is a line type header with date
-- "Bunnfortøyning type 3" ❌ SKIP - Line category description
-
-EXAMPLES OF WHAT TO EXTRACT (COMPONENTS) - **WITH MANUFACTURER INHERITANCE**:
-- "H01A | 1 | Ploganker | Softanker 1700 kg | | 606616 | AQS TOR | 12T | 20MIN" ✅ EXTRACT
-  - Position: H01A, Sequence: 1, Type: anchor, Description: "Softanker 1700 kg"
-  - Part number: 606616, Manufacturer: "AQS TOR", Tracking: "12T"
-  - Specs: weight_kg=1700
-  - **NOTE: This is sequence 1, so "AQS TOR" will be inherited by all subsequent components in H01A**
-
-- "H01A | 2 | Sjakkel | Sjakkel 90T | | GAP-GBA | | |" ✅ EXTRACT
-  - Position: H01A, Sequence: 2, Type: shackle, Description: "Sjakkel 90T"
-  - Part number: "GAP-GBA" is actually tracking! (column 8 position)
-  - Manufacturer: **"AQS TOR" (inherited from sequence 1)**
-  - Tracking: "GAP-GBA" (alphanumeric tracking number!)
-  - Specs: capacity_t=90
-
-- "H01A | 3 | Kjetting | Kjetting stolpeløs 30mm - 27,5m | | G1463 | | |" ✅ EXTRACT
-  - Position: H01A, Sequence: 3, Type: chain, Description: "Kjetting stolpeløs 30mm - 27,5m"
-  - Manufacturer: **"AQS TOR" (inherited from sequence 1)**
-  - Tracking: "G1463" (alphanumeric tracking!)
-  - Specs: diameter_mm=30, length_m=27.5
-
-**KEY POINT:** Components 2, 3, 4, 5... in position H01A ALL get manufacturer="AQS TOR" even though column 7 is empty for them!
-
-Return ONLY valid JSON in this exact format:
+Return ONLY valid JSON in this exact format (replace ALL placeholder values with actual data from the components):
 {
   "component_groups": [
     {
-      "document_reference": "H01A",
+      "document_reference": "<actual position from data>",
       "position_type": "mooring_line",
       "sheet_source": "${sheetName}",
       "components": [
         {
-          "sequence": 1,
-          "type": "anchor",
-          "description": "Softanker 1700 kg",
-          "quantity": 1,
+          "sequence": <actual sequence number>,
+          "type": "<actual component type>",
+          "description": "<actual description from data>",
+          "quantity": <actual quantity>,
           "specifications": {
-            "weight_kg": 1700,
-            "length_m": null,
-            "diameter_mm": null,
-            "capacity_t": null
+            "weight_kg": <extract from actual description or null>,
+            "length_m": <extract from actual description or null>,
+            "diameter_mm": <extract from actual description or null>,
+            "capacity_t": <extract from actual description or null>
           },
-          "part_number": "606616",
-          "manufacturer": "AQS TOR",
-          "tracking_number": "12T",
-          "installation_date": "01.08.2024",
-          "confidence": 0.95
-        },
-        {
-          "sequence": 2,
-          "type": "shackle",
-          "description": "Sjakkel 90T",
-          "quantity": 1,
-          "specifications": {
-            "weight_kg": null,
-            "length_m": null,
-            "diameter_mm": null,
-            "capacity_t": 90
-          },
-          "part_number": null,
-          "manufacturer": "AQS TOR",
-          "tracking_number": "GAP-GBA",
-          "installation_date": null,
-          "confidence": 0.90
+          "part_number": "<actual part number from data or null>",
+          "manufacturer": "<actual manufacturer from data or inherited>",
+          "tracking_number": "<actual tracking code from data>",
+          "installation_date": "<actual date from data or null>",
+          "confidence": <0.0-1.0 based on data quality>
         }
       ]
     }
   ]
 }
 
-REMEMBER: 
-- **Manufacturer inheritance:** Manufacturer from sequence 1 applies to ALL components in that position
-- **Tracking on every component:** Each component has its own tracking code (GAP-GBA, G1463, 12T, 20MIN, etc.)
-- **Alphanumeric tracking codes are normal:** GAP-GBA, GEJ-14698, G1463, 12T, 20MIN are all valid tracking numbers
-- If manufacturer field is empty on sequence 2+, copy manufacturer from sequence 1
-- Manufacturer = company name (AQS TOR, Scale AQ, Mørenot)
-- Tracking = alphanumeric code for individual component tracing
-- Extract ALL ${componentStrings.length} components systematically
-- Skip only actual headers like "Fortøyningsline type X.X"`;
+CRITICAL: Extract ALL ${componentStrings.length} components from the batch. Do NOT use placeholder values. Analyze the actual data provided in the sample above.`;
 
         try {
             const response = await this.client.chat.completions.create({
@@ -330,7 +266,7 @@ REMEMBER:
                 messages: [
                     {
                         role: "system",
-                        content: "You are an expert at parsing Norwegian aquaculture component data. You understand that manufacturer appears only on the first component of each position and must be inherited by all subsequent components in that position. Tracking numbers are alphanumeric codes that appear on every component. Extract ALL components systematically. Return only valid JSON without markdown formatting."
+                        content: "You are an expert at parsing Norwegian aquaculture component data. CRITICAL: Field positions vary because empty Excel cells are omitted. You must identify fields by CONTENT PATTERNS, not positions. Manufacturer appears only on sequence 1 and must be inherited by all subsequent components in that position. Tracking numbers (like GAP-GBA, G1463, 12T) are alphanumeric codes that appear on every component - do NOT confuse them with part numbers. Use content analysis: numeric codes = part numbers, company names = manufacturer, alphanumeric codes with hyphens = tracking. Extract ALL components systematically. Return only valid JSON without markdown formatting."
                     },
                     {
                         role: "user",
@@ -373,7 +309,7 @@ REMEMBER:
                         messages: [
                             {
                                 role: "system",
-                                content: "You are an expert at parsing Norwegian aquaculture component data. You understand that manufacturer appears only on the first component of each position and must be inherited by all subsequent components in that position. Tracking numbers are alphanumeric codes that appear on every component. Extract ALL components systematically. Return only valid JSON without markdown formatting."
+                                content: "You are an expert at parsing Norwegian aquaculture component data. CRITICAL: Field positions vary because empty Excel cells are omitted. You must identify fields by CONTENT PATTERNS, not positions. Manufacturer appears only on sequence 1 and must be inherited by all subsequent components in that position. Tracking numbers (like GAP-GBA, G1463, 12T) are alphanumeric codes that appear on every component - do NOT confuse them with part numbers. Use content analysis: numeric codes = part numbers, company names = manufacturer, alphanumeric codes with hyphens = tracking. Extract ALL components systematically. Return only valid JSON without markdown formatting."
                             },
                             {
                                 role: "user",
