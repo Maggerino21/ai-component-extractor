@@ -1,4 +1,3 @@
-// src/services/mockDatabase.js
 const mockFacilities = [
   { UID: 1, Navn: "Facility Alpha", Lokasjon_UID: 1 },
   { UID: 2, Navn: "Facility Beta", Lokasjon_UID: 2 }

@@ -1138,4 +1138,34 @@ body {
     .component-item {
         padding: 1rem;
     }
+
+    .tracking-number {
+        background: #ffd54f;
+        color: #333;
+        padding: 0.3rem 0.6rem;
+        border-radius: 10px;
+        font-size: 0.8rem;
+        font-weight: 700;
+        font-family: monospace;
+        border: 2px solid #ffc107;
+    }
+
+    .install-date {
+        color: #666;
+        font-size: 0.8rem;
+        background: #e3f2fd;
+        padding: 0.3rem 0.6rem;
+        border-radius: 10px;
+    }
+
+    .extraction-method {
+        color: #999;
+        font-size: 0.7rem;
+        font-style: italic;
+        background: #f5f5f5;
+        padding: 0.2rem 0.5rem;
+        border-radius: 8px;
+    }
+
+    
 }

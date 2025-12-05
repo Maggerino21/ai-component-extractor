@@ -15,7 +15,7 @@ const progressBar = document.getElementById('progressBar');
 const progressStatus = document.getElementById('progressStatus');
 
 // Import services
-const FileProcessor = require('../services/fileProcessor');
+const FileProcessor = require('../services/fileProcessor_deterministic');
 const logger = require('../utils/logger');
 
 // Initialize services
@@ -572,8 +572,13 @@ function renderFileResult(result) {
     }
     
     const aiData = aiExtraction.data;
-    const componentGroups = aiData.component_groups || [];
-    const totalComponents = componentGroups.reduce((sum, group) => sum + (group.components?.length || 0), 0);
+    
+    // FIXED: Support both Norwegian (position_groups) and English (component_groups) structures
+    const positionGroups = aiData.position_groups || aiData.component_groups || [];
+    const totalComponents = positionGroups.reduce((sum, group) => {
+        const components = group.komponenter || group.components || [];
+        return sum + components.length;
+    }, 0);
     
     return `
         <div class="file-result success">
@@ -586,7 +591,7 @@ function renderFileResult(result) {
                 <h6>🤖 AI Extraction Results</h6>
                 <div class="ai-summary">
                     <div class="ai-stat">
-                        <span class="ai-value">${componentGroups.length}</span>
+                        <span class="ai-value">${positionGroups.length}</span>
                         <span class="ai-label">Position Groups</span>
                     </div>
                     <div class="ai-stat">
@@ -596,25 +601,24 @@ function renderFileResult(result) {
                 </div>
                 
                 <div class="component-groups">
-                    ${componentGroups.map(renderComponentGroup).join('')}
+                    ${positionGroups.map(renderPositionGroup).join('')}
                 </div>
             </div>
         </div>
     `;
 }
 
-function renderComponentGroup(group) {
-    const mappingStatus = group.mapping_found ? 
-        `<span class="mapping-found">→ Position ${group.internal_position}</span>` :
-        `<span class="mapping-missing">No mapping found</span>`;
-    
-    const components = group.components || [];
+function renderPositionGroup(group) {
+    // Support both Norwegian and English field names
+    const docRef = group.dokument_referanse || group.document_reference || 'Unknown';
+    const posType = group.posisjon_type || group.position_type || 'unknown';
+    const components = group.komponenter || group.components || [];
     
     return `
         <div class="component-group">
             <div class="group-header">
-                <h6>📍 "${group.document_reference}" ${mappingStatus}</h6>
-                <span class="component-count">${components.length} components</span>
+                <h6>📍 "${docRef}" (${posType})</h6>
+                <span class="component-count">${components.length} komponenter</span>
             </div>
             
             <div class="components-list">
@@ -625,32 +629,45 @@ function renderComponentGroup(group) {
 }
 
 function renderComponent(component) {
-    const confidenceClass = (component.confidence || 0) >= 0.8 ? 'high' : 
-                           (component.confidence || 0) >= 0.6 ? 'medium' : 'low';
+    // Support both Norwegian and English field names
+    const type = component.type || 'ukjent';
+    const description = component.beskrivelse || component.description || 'Ingen beskrivelse';
+    const quantity = component.mengde || component.quantity || 1;
+    const manufacturer = component.leverandor || component.manufacturer || '';
+    const tracking = component.sporingsnummer || component.tracking_number || component.part_number || '';
+    const confidence = component.confidence || 0;
     
-    const specs = [];
-    if (component.specifications?.length_m) specs.push(`${component.specifications.length_m}m`);
-    if (component.specifications?.diameter_mm) specs.push(`⌀${component.specifications.diameter_mm}mm`);
-    if (component.specifications?.weight_kg) specs.push(`${component.specifications.weight_kg}kg`);
+    const specs = component.spesifikasjoner || component.specifications || {};
+    const specsArray = [];
+    
+    if (specs.lengde_m || specs.length_m) specsArray.push(`${specs.lengde_m || specs.length_m}m`);
+    if (specs.diameter_mm) specsArray.push(`⌀${specs.diameter_mm}mm`);
+    if (specs.vekt_kg || specs.weight_kg) specsArray.push(`${specs.vekt_kg || specs.weight_kg}kg`);
+    if (specs.kapasitet_t || specs.capacity_t) specsArray.push(`${specs.kapasitet_t || specs.capacity_t}T`);
+    
+    const confidenceClass = confidence >= 0.8 ? 'high' : confidence >= 0.6 ? 'medium' : 'low';
     
     return `
         <div class="component-item">
             <div class="component-main">
-                <span class="component-type">${component.type || 'unknown'}</span>
-                <span class="component-quantity">×${component.quantity || 1}</span>
-                <span class="component-specs">${specs.join(' · ')}</span>
+                <span class="component-type">${type}</span>
+                <span class="component-quantity">×${quantity}</span>
+                <span class="component-specs">${specsArray.join(' · ')}</span>
             </div>
             <div class="component-details">
-                <div class="component-description">${component.description || 'No description'}</div>
+                <div class="component-description">${description}</div>
                 <div class="component-meta">
-                    ${component.manufacturer ? `<span class="manufacturer">by ${component.manufacturer}</span>` : ''}
-                    ${component.part_number ? `<span class="part-number">#${component.part_number}</span>` : ''}
-                    <span class="confidence ${confidenceClass}">${Math.round((component.confidence || 0) * 100)}%</span>
+                    ${manufacturer ? `<span class="manufacturer">av ${manufacturer}</span>` : ''}
+                    ${tracking ? `<span class="part-number">#${tracking}</span>` : ''}
+                    <span class="confidence ${confidenceClass}">${Math.round(confidence * 100)}%</span>
                 </div>
             </div>
         </div>
     `;
 }
+
+
+
 
 function exportResults() {
     if (!extractedData) {

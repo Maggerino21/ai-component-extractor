@@ -18,10 +18,8 @@ function createWindow() {
     title: 'Aquaculture AI Extractor'
   });
 
-  // Load the main HTML file
   mainWindow.loadFile('src/renderer/index.html');
 
-  // Open DevTools in development
   if (isDev) {
     mainWindow.webContents.openDevTools();
   }
@@ -31,7 +29,6 @@ function createWindow() {
   });
 }
 
-// App event handlers
 app.whenReady().then(createWindow);
 
 app.on('window-all-closed', () => {
@@ -46,7 +43,6 @@ app.on('activate', () => {
   }
 });
 
-// IPC handlers for file operations
 ipcMain.handle('select-files', async () => {
   const result = await dialog.showOpenDialog(mainWindow, {
     properties: ['openFile', 'multiSelections'],
@@ -77,5 +73,4 @@ ipcMain.handle('save-results', async (event, data) => {
   return null;
 });
 
-// Handle app updates and other system events
 app.setAppUserModelId('com.aquaculture.ai-extractor');
