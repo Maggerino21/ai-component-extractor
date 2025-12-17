@@ -79,7 +79,7 @@ class DatabaseService {
                     Longitude,
                     Active,
                     CustomerId
-                FROM Locality
+                FROM Localities
                 WHERE IsDeleted = 0 AND Active = 1
                 ORDER BY Name
             `;
@@ -108,7 +108,7 @@ class DatabaseService {
                         LocalityId,
                         NoOfMooringLines,
                         NoOfCages
-                    FROM Mooring
+                    FROM Moorings
                     WHERE LocalityId = @localityId 
                       AND IsDeleted = 0 
                       AND Active = 1
@@ -147,7 +147,7 @@ class DatabaseService {
                         InstallationDate,
                         IsActive,
                         MooringId
-                    FROM Position
+                    FROM Positions
                     WHERE MooringId = @mooringId 
                       AND IsDeleted = 0
                     ORDER BY Name
@@ -181,9 +181,9 @@ class DatabaseService {
                         u.Name as UnitName,
                         u.Abbreviation as UnitAbbr,
                         pc.Name as CategoryName
-                    FROM Product p
-                    INNER JOIN Supplier s ON p.SupplierId = s.Id
-                    LEFT JOIN Unit u ON p.UnitId = u.Id
+                    FROM Products p
+                    INNER JOIN Suppliers s ON p.SupplierId = s.Id
+                    LEFT JOIN Units u ON p.UnitId = u.Id
                     LEFT JOIN ProductCategory pc ON p.ProductCategoryId = pc.Id
                     WHERE p.IsDeleted = 0 
                       AND p.Active = 1
@@ -205,9 +205,9 @@ class DatabaseService {
                         u.Name as UnitName,
                         u.Abbreviation as UnitAbbr,
                         pc.Name as CategoryName
-                    FROM Product p
-                    INNER JOIN Supplier s ON p.SupplierId = s.Id
-                    LEFT JOIN Unit u ON p.UnitId = u.Id
+                    FROM Products p
+                    INNER JOIN Suppliers s ON p.SupplierId = s.Id
+                    LEFT JOIN Units u ON p.UnitId = u.Id
                     LEFT JOIN ProductCategory pc ON p.ProductCategoryId = pc.Id
                     WHERE p.IsDeleted = 0 
                       AND p.Active = 1
@@ -250,7 +250,7 @@ class DatabaseService {
                     OrganizationNumber,
                     ContactPerson,
                     IsActive
-                FROM Supplier
+                FROM Suppliers
                 WHERE IsDeleted = 0 AND IsActive = 1
                 ORDER BY Name
             `;
@@ -271,7 +271,7 @@ class DatabaseService {
                 .input('supplierName', sql.NVarChar, `%${supplierName}%`)
                 .query`
                     SELECT Id, Name
-                    FROM Supplier
+                    FROM Suppliers
                     WHERE Name LIKE @supplierName
                       AND IsDeleted = 0
                       AND IsActive = 1
@@ -294,7 +294,7 @@ class DatabaseService {
             const result = await this.pool.request()
                 .input('name', sql.NVarChar, supplierName)
                 .query`
-                    INSERT INTO Supplier (Name, IsActive, IsDeleted, CreatedAt, UpdatedAt)
+                    INSERT INTO Suppliers (Name, IsActive, IsDeleted, CreatedAt, UpdatedAt)
                     OUTPUT INSERTED.Id, INSERTED.Name
                     VALUES (@name, 1, 0, GETDATE(), GETDATE())
                 `;
@@ -317,7 +317,7 @@ class DatabaseService {
                     Name,
                     Abbreviation,
                     Description
-                FROM Unit
+                FROM Units
                 WHERE IsDeleted = 0
                 ORDER BY Name
             `;
@@ -338,7 +338,7 @@ class DatabaseService {
                 .input('abbr', sql.NVarChar, abbreviation)
                 .query`
                     SELECT Id, Name, Abbreviation
-                    FROM Unit
+                    FROM Units
                     WHERE Abbreviation = @abbr OR Name = @abbr
                       AND IsDeleted = 0
                 `;
@@ -369,7 +369,7 @@ class DatabaseService {
                 .input('installationDate', sql.DateTime, componentData.installationDate)
                 .input('notes', sql.NVarChar, componentData.notes)
                 .query`
-                    INSERT INTO Component (
+                    INSERT INTO Components (
                         PositionId,
                         ProductId,
                         ProductNumber,
@@ -418,7 +418,7 @@ class DatabaseService {
                 .input('positionId', sql.Int, positionId)
                 .input('reference', sql.NVarChar, reference)
                 .query`
-                    UPDATE Position
+                    UPDATE Positions
                     SET Reference = @reference,
                         UpdatedAt = GETDATE()
                     WHERE Id = @positionId

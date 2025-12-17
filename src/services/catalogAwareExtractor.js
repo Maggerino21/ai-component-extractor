@@ -74,36 +74,55 @@ class CatalogAwareExtractor {
 
     async extractPositionsWithCatalogMatching(rows, sheetName, positionMappings) {
         const grouped = this.groupRowsByPosition(rows);
-        const positionGroups = [];
-
-        for (const [positionRef, componentRows] of Object.entries(grouped)) {
-            logger.info(`🎯 Processing position: ${positionRef} (${componentRows.length} rows)`);
-
-            const componentsText = this.formatComponentsForAI(componentRows);
-            
-            const relevantCatalog = this.getRelevantCatalog(componentsText);
-
-            const extractedComponents = await this.aiExtractWithCatalog(
-                componentsText,
-                relevantCatalog,
-                positionRef
-            );
-
-            const mapping = positionMappings.find(m => 
-                m.documentReference.toLowerCase() === positionRef.toLowerCase()
-            );
-
-            positionGroups.push({
-                document_reference: positionRef,
-                internal_position: mapping ? mapping.internalPosition : null,
-                position_id: mapping ? mapping.positionId : null,
-                mapping_found: !!mapping,
-                sheet_source: sheetName,
-                components: extractedComponents
-            });
+        const allPositionRefs = Object.keys(grouped);
+        
+        const chunks = [];
+        for (let i = 0; i < allPositionRefs.length; i += 15) {
+            chunks.push(allPositionRefs.slice(i, i + 15));
         }
+        
+        logger.info(`🚀 Processing ${allPositionRefs.length} positions in ${chunks.length} chunks from sheet: ${sheetName}`);
+        
+        const allPositionGroups = [];
+        
+        const chunkPromises = chunks.map(async (chunk) => {
+    const chunkPositionsText = chunk.map(positionRef => {
+        const componentRows = grouped[positionRef];
+        const componentsText = this.formatComponentsForAI(componentRows);
+        return `POSITION: ${positionRef}\n${componentsText}\n`;
+    }).join('\n---\n\n');
+    
+    const relevantCatalog = this.getRelevantCatalog(chunkPositionsText);
+    
+    const chunkExtractedData = await this.aiExtractBatchWithCatalog(
+        chunkPositionsText,
+        relevantCatalog,
+        chunk
+    );
+    
+    return { chunk, chunkExtractedData };
+});
 
-        return positionGroups;
+const allChunkResults = await Promise.all(chunkPromises);
+
+for (const { chunk, chunkExtractedData } of allChunkResults) {
+    for (const [positionRef, extractedComponents] of Object.entries(chunkExtractedData)) {
+        const mapping = positionMappings.find(m => 
+            m.documentReference.toLowerCase() === positionRef.toLowerCase()
+        );
+        
+        allPositionGroups.push({
+            document_reference: positionRef,
+            internal_position: mapping ? mapping.internalPosition : null,
+            position_id: mapping ? mapping.positionId : null,
+            mapping_found: !!mapping,
+            sheet_source: sheetName,
+            components: extractedComponents
+        });
+    }
+}
+        
+        return allPositionGroups;
     }
 
     groupRowsByPosition(rows) {
@@ -166,75 +185,91 @@ class CatalogAwareExtractor {
         return relevantProducts.length > 0 ? relevantProducts : this.productCatalog.slice(0, 200);
     }
 
-    async aiExtractWithCatalog(componentsText, catalogSubset, positionRef) {
+    async aiExtractBatchWithCatalog(allPositionsText, catalogSubset, positionRefs) {
         try {
             this.aiCallCount++;
-
-            const catalogFormatted = catalogSubset.map(p => ({
+            
+            const catalogFormatted = catalogSubset.slice(0, 50).map(p => ({
                 id: p.id,
                 description: p.description,
                 supplier: p.supplier,
-                mbl: p.mbl,
-                unit: p.unit
+                mbl: p.mbl
             }));
+            
+            const prompt = `Extract aquaculture components from MULTIPLE positions.
 
-            const prompt = `You are an expert at extracting aquaculture mooring component data and matching it to our product catalog.
+**POSITIONS DATA:**
+${allPositionsText}
 
-**POSITION:** ${positionRef}
-
-**COMPONENT DATA FROM DOCUMENT:**
-${componentsText}
-
-**OUR PRODUCT CATALOG (${catalogFormatted.length} products):**
+**PRODUCT CATALOG (${catalogFormatted.length} products):**
 ${JSON.stringify(catalogFormatted, null, 2)}
 
 **CRITICAL RULES:**
-1. Manufacturer appears ONLY on sequence 1 - all subsequent components inherit it
-2. Match each component to our catalog using description + supplier
-3. Extract tracking numbers (alphanumeric codes like "606616", "GAP-GBA", "G1463")
-4. Extract installation dates if present
-5. Ignore noise data like "12T", "20MIN" - focus on tracking numbers and descriptions
-
-**OUTPUT FORMAT (JSON only, no markdown):**
-{
-  "components": [
-    {
-      "sequence": 1,
-      "type": "anchor",
-      "description": "Softanker 1700 kg",
-      "manufacturer": "AQS TOR",
-      "matched_product_id": 1234,
-      "match_confidence": 0.98,
-      "match_reason": "Exact description and supplier match",
-      "tracking_number": "606616",
-      "quantity": 1,
-      "unit": "pcs",
-      "mbl_kg": 1700,
-      "installation_date": "2024-08-01",
-      "notes": null
-    }
-  ]
-}
+1. Manufacturer appears ONLY on sequence 1 per position - all other components inherit it
+2. Match to catalog using description + supplier
+3. Extract tracking numbers (alphanumeric codes like "606616", "GAP-GBA")
+4. QUANTITY EXTRACTION - VERY IMPORTANT:
+   - Look for "Antall" column for actual quantity
+   - If quantity column is empty or missing, default to 1
+   - DO NOT use the sequence number as quantity
+   - sequence is just the order (1,2,3), quantity is the amount
+5. Return data grouped by position reference
 
 **MATCHING PRIORITY:**
 1. Exact: Same description + same supplier = confidence 0.95-1.0
 2. Close: Similar description + same supplier = confidence 0.80-0.94
 3. Fuzzy: Partial match + same supplier = confidence 0.60-0.79
-4. No match: Set matched_product_id to null, confidence 0.0
+4. NO MATCH: If confidence < 0.60, set matched_product_id to null (NOT 6000!)
+   - Do NOT default to a generic product ID
+   - Better to have null than wrong match
 
-Return ONLY valid JSON, no markdown backticks.`;
+**OUTPUT FORMAT (JSON only, no markdown):**
+{
+  "H01A": {
+    "components": [
+      {
+        "sequence": 1,
+        "type": "anchor",
+        "description": "Softanker 1700 kg",
+        "manufacturer": "AQS TOR",
+        "matched_product_id": 3594,
+        "match_confidence": 0.98,
+        "match_reason": "Exact match",
+        "tracking_number": "606616",
+        "quantity": 1,
+        "unit": "pcs",
+        "mbl_kg": 1700,
+        "installation_date": null,
+        "notes": null
+      },
+      {
+        "sequence": 2,          
+        "type": "shackle",
+        "description": "Sjakkel 90T",
+        "manufacturer": "AQS TOR",
+        "quantity": 2,        
+        ...
+      }
+    ]
+  },
+  "K01": {
+    "components": [...]
+  }
+}
+
+Return ONLY valid JSON with position references as keys.`;
 
             const response = await this.client.chat.completions.create({
                 model: this.model,
                 messages: [
                     { 
                         role: 'system', 
-                        content: 'You are a precise extractor for aquaculture mooring components. Return only valid JSON.' 
+                        content: 'You are a precise extractor for aquaculture components. Return only valid JSON grouped by position reference.' 
                     },
                     { role: 'user', content: prompt }
                 ],
                 temperature: 0.1,
-                max_tokens: 4000
+                max_tokens: 16000
             });
 
             const responseText = response.choices[0].message.content.trim();
@@ -244,29 +279,56 @@ Return ONLY valid JSON, no markdown backticks.`;
                 const cleanedText = responseText.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
                 parsed = JSON.parse(cleanedText);
             } catch (e) {
-                logger.error('JSON parse failed, attempting cleanup', { response: responseText });
-                const jsonMatch = responseText.match(/\{[\s\S]*\}/);
-                if (jsonMatch) {
-                    parsed = JSON.parse(jsonMatch[0]);
-                } else {
-                    throw new Error('Could not extract valid JSON from AI response');
-                }
+                logger.error('JSON parse failed for batch', { response: responseText.substring(0, 500) });
+                const emptyResults = {};
+                positionRefs.forEach(ref => emptyResults[ref] = []);
+                return emptyResults;
             }
-
-            logger.info(`✅ Extracted ${parsed.components?.length || 0} components for ${positionRef} with catalog matching`);
             
-            return parsed.components || [];
-
+            const results = {};
+            for (const positionRef of positionRefs) {
+                const positionData = parsed[positionRef] || parsed[positionRef.toUpperCase()] || parsed[positionRef.toLowerCase()];
+                results[positionRef] = positionData?.components || [];
+            }
+            
+            logger.info(`✅ Batch extracted components for ${Object.keys(results).length} positions`);
+            
+            return results;
+            
         } catch (error) {
-            logger.error('❌ AI extraction with catalog failed', error);
-            return [];
+            logger.error('❌ Batch AI extraction failed', error);
+            const emptyResults = {};
+            positionRefs.forEach(ref => emptyResults[ref] = []);
+            return emptyResults;
         }
     }
 
     shouldSkipSheet(sheetName) {
-        const skipPatterns = ['not_flytekrage', 'flytekrage', 'bunnringsoppheng', 'not', 'ekstra'];
         const nameLower = (sheetName || '').toString().toLowerCase();
-        return skipPatterns.some(pattern => nameLower.includes(pattern));
+        
+        const allowedPatterns = [
+            'fortøyningslinje',
+            'fortoyningslinje',
+            'fortøyningsliner',
+            'fortoyningsliner',
+            'mooring',
+            'anker',
+            'hjørne',
+            'hjorne',
+            'buoy',
+            'bøye',
+            'boye',
+            'bridle',
+            'breidel',
+            'rammelinje',
+            'rammeliner',
+            'ramme',
+            'frame'
+        ];
+        
+        const isAllowed = allowedPatterns.some(pattern => nameLower.includes(pattern));
+        
+        return !isAllowed;
     }
 }
 

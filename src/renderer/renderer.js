@@ -201,12 +201,22 @@ async function setupPositionMapping() {
 }
 
 async function loadLocalitySelector() {
+    console.log('Loading localities for selection...');
     try {
+        console.log('🔍 Step 2: Fetching localities from database');
+
         const localities = await fileProcessor.getLocalities();
+
+        console.log(`🔍 Step 3: Got ${localities.length} localities`);
         
+        // Sort alphabetically by name
+        console.log('🔍 Step 4: Sorting localities');
+        localities.sort((a, b) => a.Name.localeCompare(b.Name));
+        console.log('🔍 Step 5: Creating HTML');
         const localityArea = document.getElementById('localityArea') || document.createElement('div');
         localityArea.id = 'localityArea';
         localityArea.className = 'content-area';
+        console.log('🔍 Step 7: Appending to DOM');
         localityArea.innerHTML = `
             <div class="locality-selector">
                 <h3>🏢 Select Facility (Locality)</h3>
@@ -220,31 +230,30 @@ async function loadLocalitySelector() {
                         oninput="filterLocalities()"
                         autofocus
                     />
-                    <span id="localityCount" class="search-count">Showing ${localities.length} facilities</span>
+                    <span id="localityCount" class="search-count">Type to search ${localities.length} facilities</span>
                 </div>
                 
                 <div class="locality-list" id="localityList">
-                    ${localities.map(loc => `
-                        <div class="locality-card" data-name="${loc.Name.toLowerCase()}" data-location="${loc.LocationNr}" onclick="selectLocality(${loc.Id}, '${loc.Name.replace(/'/g, "\\'")}')">
-                            <h4>${loc.Name}</h4>
-                            <p>Location #: ${loc.LocationNr}</p>
-                            <p>Coordinates: ${loc.Latitude ? `${loc.Latitude}, ${loc.Longitude}` : 'N/A'}</p>
-                        </div>
-                    `).join('')}
+                    <p style="text-align: center; color: #666; padding: 2rem;">
+                        👆 Start typing to search facilities
+                    </p>
                 </div>
                 
                 <button onclick="backToUpload()" class="btn-secondary">⬅️ Back to Files</button>
             </div>
         `;
-        
+        console.log('✅ Step 8: Complete!');
         if (!document.getElementById('localityArea')) {
             uploadArea.parentNode.insertBefore(localityArea, uploadArea.nextSibling);
         }
         
-        // Store localities for filtering
+        const existingArea = document.getElementById('localityArea');
+        if (existingArea) {
+            existingArea.style.display = 'block';
+        }
+        
         window.allLocalities = localities;
         
-        // Focus search input
         setTimeout(() => {
             const searchInput = document.getElementById('localitySearchInput');
             if (searchInput) searchInput.focus();
@@ -258,40 +267,54 @@ async function loadLocalitySelector() {
 function filterLocalities() {
     const searchInput = document.getElementById('localitySearchInput');
     const searchTerm = searchInput.value.toLowerCase().trim();
-    const localityCards = document.querySelectorAll('.locality-card');
+    const localityList = document.getElementById('localityList');
     const countSpan = document.getElementById('localityCount');
     
-    let visibleCount = 0;
+    if (searchTerm.length < 2) {
+        localityList.innerHTML = `
+            <p style="text-align: center; color: #666; padding: 2rem;">
+                👆 Type at least 2 characters to search
+            </p>
+        `;
+        countSpan.textContent = `Type to search ${window.allLocalities.length} facilities`;
+        return;
+    }
     
-    localityCards.forEach(card => {
-        const name = card.getAttribute('data-name');
-        const locationNr = card.getAttribute('data-location');
-        
-        const matches = name.includes(searchTerm) || locationNr.includes(searchTerm);
-        
-        if (matches || searchTerm === '') {
-            card.style.display = 'block';
-            visibleCount++;
-        } else {
-            card.style.display = 'none';
-        }
+    const filtered = window.allLocalities.filter(loc => {
+        const name = (loc.Name || '').toLowerCase();
+        const locationNr = (loc.LocationNr || '').toString().toLowerCase();
+        return name.includes(searchTerm) || locationNr.includes(searchTerm);
     });
     
-    countSpan.textContent = searchTerm 
-        ? `Showing ${visibleCount} of ${localityCards.length} facilities`
-        : `Showing ${localityCards.length} facilities`;
+    const limited = filtered.slice(0, 50);
+    const hasMore = filtered.length > 50;
     
-    // If only one result, highlight it
-    if (visibleCount === 1) {
-        localityCards.forEach(card => {
-            if (card.style.display !== 'none') {
-                card.classList.add('highlighted');
-            } else {
-                card.classList.remove('highlighted');
-            }
-        });
-    } else {
-        localityCards.forEach(card => card.classList.remove('highlighted'));
+    if (limited.length === 0) {
+        localityList.innerHTML = `
+            <p style="text-align: center; color: #999; padding: 2rem;">
+                No facilities found matching "${searchTerm}"
+            </p>
+        `;
+        countSpan.textContent = `No results`;
+        return;
+    }
+    
+    localityList.innerHTML = limited.map(loc => `
+        <div class="locality-card" onclick="selectLocality(${loc.Id}, '${loc.Name.replace(/'/g, "\\'")}')">
+            <h4>${loc.Name}</h4>
+            <p>Location #: ${loc.LocationNr}</p>
+            ${loc.Latitude ? `<p>Coordinates: ${loc.Latitude}, ${loc.Longitude}</p>` : ''}
+        </div>
+    `).join('');
+    
+    const countText = hasMore 
+        ? `Showing first 50 of ${filtered.length} results (${window.allLocalities.length} total)`
+        : `Showing ${limited.length} of ${window.allLocalities.length} facilities`;
+    
+    countSpan.textContent = countText;
+    
+    if (limited.length === 1) {
+        localityList.querySelector('.locality-card').classList.add('highlighted');
     }
 }
 
@@ -308,12 +331,26 @@ async function selectLocality(localityId, localityName) {
         }
         
         currentMooring = mooring;
-        const positions = await fileProcessor.getPositions(mooring.Id);
-        currentPositions = positions;
+        const allPositions = await fileProcessor.getPositions(mooring.Id);
         
-        showNotification(`✅ Loaded ${positions.length} positions`, 'success');
+        const filteredPositions = allPositions.filter(pos => {
+            const name = (pos.Name || '').toString().trim();
+            
+            if (!/^\d{3}$/.test(name)) {
+                return false;
+            }
+            
+            const firstDigit = name[0];
+            return ['1', '3', '5', '7'].includes(firstDigit);
+        });
         
-        initializePositionMapper(positions);
+        currentPositions = filteredPositions;
+        
+        logger.info(`Filtered positions: ${allPositions.length} total → ${filteredPositions.length} relevant (101-199, 301-399, 501-599, 701-799)`);
+        
+        showNotification(`✅ Loaded ${filteredPositions.length} relevant positions`, 'success');
+        
+        initializePositionMapper(filteredPositions);
         showStep('mapping');
         
     } catch (error) {
@@ -339,9 +376,9 @@ function initializePositionMapper(positions) {
                     ${positions.map(pos => `
                         <div class="mapping-row">
                             <div class="position-info">
-                                <span class="position-number">${pos.Id}</span>
-                                <span class="position-name">${pos.Name || 'Unnamed'}</span>
+                                <span class="position-number">${pos.Name || pos.Id}</span>
                                 <span class="position-type">${pos.Type || 'Unknown'}</span>
+                                <span class="position-id-small">(ID: ${pos.Id})</span>
                             </div>
                             <div class="document-reference">
                                 <input 
@@ -376,8 +413,8 @@ async function savePositionMappings() {
         .filter(pos => pos.Reference && pos.Reference.trim())
         .map(pos => ({
             documentReference: pos.Reference.trim(),
-            internalPosition: pos.Id,
-            positionId: pos.Id,
+            internalPosition: pos.Name,
+            positionId: pos.Id,         
             positionName: pos.Name,
             positionType: pos.Type
         }));

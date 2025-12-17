@@ -1224,5 +1224,11 @@ body {
     background: linear-gradient(135deg, #f8fff8, #f0fff0);
 }
 
+.position-id-small {
+    color: #999;
+    font-size: 0.75rem;
+    margin-left: 0.5rem;
+}
+
     
 }
