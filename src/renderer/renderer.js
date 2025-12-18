@@ -23,6 +23,9 @@ let extractedData = null;
 let currentLocality = null;
 let currentMooring = null;
 let currentPositions = [];
+let selectedSupplier = null;
+let allSuppliers = [];
+let allProducts = [];
 
 document.addEventListener('DOMContentLoaded', async () => {
     try {
@@ -40,6 +43,33 @@ async function initializeApp() {
     try {
         showNotification('Connecting to database...', 'info');
         await fileProcessor.initialize();
+        
+        const rawSuppliers = await fileProcessor.getSuppliers();
+        allProducts = await fileProcessor.getProductCatalog();
+        
+        logger.info(`DEBUG: Loaded ${rawSuppliers.length} total suppliers from database`);
+        
+        const productCountBySupplier = {};
+        allProducts.forEach(p => {
+            if (!productCountBySupplier[p.supplierId]) {
+                productCountBySupplier[p.supplierId] = 0;
+            }
+            productCountBySupplier[p.supplierId]++;
+        });
+        
+        // Filter to only ArtiklerLeverandors (product catalog suppliers)
+        allSuppliers = rawSuppliers
+            .filter(s => s.RefEntityName === 'ArtiklerLeverandors')
+            .map(s => ({
+                ...s,
+                productCount: productCountBySupplier[s.Id] || 0
+            }))
+            .filter(s => s.productCount > 0)
+            .sort((a, b) => b.productCount - a.productCount);
+        
+        logger.info(`Filtered to ${allSuppliers.length} product catalog suppliers (ArtiklerLeverandors with products)`);
+        logger.info(`Top suppliers: ${allSuppliers.slice(0, 5).map(s => `${s.Name} (${s.productCount})`).join(', ')}`);
+        
         showNotification('✅ Connected to database', 'success');
     } catch (error) {
         showError('Failed to connect to database: ' + error.message);
@@ -76,6 +106,7 @@ function showStep(step) {
         'upload': uploadArea,
         'locality': document.getElementById('localityArea'),
         'mapping': document.getElementById('mappingArea'),
+        'supplier': document.getElementById('supplierArea'),
         'processing': processingArea,
         'results': resultsArea
     };
@@ -93,7 +124,7 @@ function showStep(step) {
 
 function updateStepIndicators(currentStep) {
     const indicators = document.querySelectorAll('.step-indicator');
-    const stepOrder = ['upload', 'locality', 'mapping', 'processing', 'results'];
+    const stepOrder = ['upload', 'locality', 'mapping', 'supplier', 'processing', 'results'];
     const currentIndex = stepOrder.indexOf(currentStep);
     
     indicators.forEach((indicator, index) => {
@@ -209,7 +240,6 @@ async function loadLocalitySelector() {
 
         console.log(`🔍 Step 3: Got ${localities.length} localities`);
         
-        // Sort alphabetically by name
         console.log('🔍 Step 4: Sorting localities');
         localities.sort((a, b) => a.Name.localeCompare(b.Name));
         console.log('🔍 Step 5: Creating HTML');
@@ -322,7 +352,16 @@ async function selectLocality(localityId, localityName) {
     try {
         showNotification(`Loading mooring system for ${localityName}...`, 'info');
         
-        currentLocality = { id: localityId, name: localityName };
+        const selectedLocalityData = window.allLocalities.find(loc => loc.Id === localityId);
+        
+        currentLocality = { 
+            id: localityId, 
+            name: localityName,
+            customerId: selectedLocalityData?.CustomerId || null
+        };
+        
+        logger.info(`Selected locality ${localityName}, Customer ID: ${currentLocality.customerId}`);
+        
         const mooring = await fileProcessor.getMooring(localityId);
         
         if (!mooring) {
@@ -394,7 +433,7 @@ function initializePositionMapper(positions) {
             </div>
             
             <div class="mapping-actions">
-                <button onclick="savePositionMappings()" class="btn-primary">💾 Save Mappings & Process Files</button>
+                <button onclick="savePositionMappings()" class="btn-primary">💾 Save Mappings & Continue</button>
                 <button onclick="backToLocality()" class="btn-secondary">⬅️ Back to Locality Selection</button>
             </div>
         </div>
@@ -414,7 +453,7 @@ async function savePositionMappings() {
         .map(pos => ({
             documentReference: pos.Reference.trim(),
             internalPosition: pos.Name,
-            positionId: pos.Id,         
+            positionId: pos.Id,
             positionName: pos.Name,
             positionType: pos.Type
         }));
@@ -425,14 +464,78 @@ async function savePositionMappings() {
     }
     
     showNotification(`✅ Mapped ${positionMappings.length} positions`, 'success');
-    updateProcessButton();
     
-    proceedToProcessing();
+    showSupplierSelector();
 }
 
-function proceedToProcessing() {
-    showStep('processing');
-    processFiles();
+function showSupplierSelector() {
+    showStep('supplier');
+    
+    const facilityNameEl = document.getElementById('supplierFacilityName');
+    if (facilityNameEl) {
+        facilityNameEl.textContent = currentLocality.name;
+    }
+    
+    logger.info(`Showing ${allSuppliers.length} product catalog suppliers`);
+    
+    window.filteredSuppliers = allSuppliers;
+    
+    setTimeout(() => {
+        const searchInput = document.getElementById('supplierSearchInput');
+        if (searchInput) searchInput.focus();
+    }, 100);
+}
+
+function searchSuppliers(searchTerm) {
+    const dropdown = document.getElementById('supplierDropdown');
+    
+    const suppliersToSearch = window.filteredSuppliers || allSuppliers;
+    
+    if (searchTerm.length < 3) {
+        dropdown.innerHTML = `<div class="dropdown-hint">Type at least 3 characters... (${suppliersToSearch.length} suppliers available)</div>`;
+        dropdown.style.display = 'block';
+        return;
+    }
+    
+    const term = searchTerm.toLowerCase();
+    const filtered = suppliersToSearch.filter(s => 
+        s.Name.toLowerCase().includes(term)
+    ).slice(0, 5);
+    
+    if (filtered.length === 0) {
+        dropdown.innerHTML = '<div class="dropdown-hint">No suppliers found</div>';
+        dropdown.style.display = 'block';
+        return;
+    }
+    
+    dropdown.innerHTML = filtered.map(s => `
+        <div class="dropdown-item" onclick="selectSupplier(${s.Id}, '${s.Name.replace(/'/g, "\\'")}')">
+            <strong>${s.Name}</strong>
+            <span class="product-count">${s.productCount} products</span>
+            ${s.OrganizationNumber ? `<span class="org-number">Org: ${s.OrganizationNumber}</span>` : ''}
+        </div>
+    `).join('');
+    dropdown.style.display = 'block';
+}
+
+function selectSupplier(supplierId, supplierName) {
+    selectedSupplier = { id: supplierId, name: supplierName };
+    
+    const searchInput = document.getElementById('supplierSearchInput');
+    const dropdown = document.getElementById('supplierDropdown');
+    const display = document.getElementById('selectedSupplierDisplay');
+    const nameEl = document.getElementById('selectedSupplierName');
+    const detailsEl = document.getElementById('selectedSupplierDetails');
+    const proceedBtn = document.getElementById('proceedToProcessingBtn');
+    
+    if (searchInput) searchInput.value = supplierName;
+    if (dropdown) dropdown.style.display = 'none';
+    if (display) display.style.display = 'block';
+    if (nameEl) nameEl.textContent = supplierName;
+    if (detailsEl) detailsEl.textContent = `Supplier ID: ${supplierId}`;
+    if (proceedBtn) proceedBtn.disabled = false;
+    
+    showNotification(`✅ Selected supplier: ${supplierName}`, 'success');
 }
 
 function backToUpload() {
@@ -441,6 +544,27 @@ function backToUpload() {
 
 function backToLocality() {
     showStep('locality');
+}
+
+function backToMapping() {
+    showStep('mapping');
+}
+
+function skipSupplierSelection() {
+    selectedSupplier = null;
+    showNotification('Using full catalog (all suppliers)', 'info');
+    showStep('processing');
+    processFiles();
+}
+
+async function proceedToProcessing() {
+    if (!selectedSupplier) {
+        showError('Please select a supplier first');
+        return;
+    }
+    
+    showStep('processing');
+    processFiles();
 }
 
 async function processFiles() {
@@ -454,16 +578,24 @@ async function processFiles() {
         return;
     }
     
-    showStep('processing');
     showProcessingStatus();
-    logger.info(`🚀 Starting catalog-aware processing of ${uploadedFiles.length} files`);
+    
+    const supplierInfo = selectedSupplier 
+        ? `with preferred supplier: ${selectedSupplier.name}` 
+        : 'with full catalog (all suppliers)';
+    
+    logger.info(`🚀 Starting catalog-aware processing ${supplierInfo}`);
     
     try {
         await updateProgress(10, 'Initializing catalog-aware AI extraction...');
         
         await updateProgress(20, 'Reading documents with product catalog...');
         
-        const results = await fileProcessor.processFiles(uploadedFiles, positionMappings);
+        const results = await fileProcessor.processFiles(
+            uploadedFiles, 
+            positionMappings,
+            selectedSupplier?.id || null
+        );
         
         await updateProgress(70, 'Processing extraction results...');
         
@@ -476,6 +608,7 @@ async function processFiles() {
             positionMappings: positionMappings,
             locality: currentLocality,
             mooring: currentMooring,
+            supplier: selectedSupplier,
             processedAt: new Date().toISOString()
         };
         
@@ -509,11 +642,15 @@ function updateProgress(percentage, status) {
 function displayResults(data) {
     if (!resultsArea) return;
     
+    const supplierText = data.supplier 
+        ? `Supplier: <strong>${data.supplier.name}</strong>`
+        : `Using <strong>Full Catalog</strong> (all suppliers)`;
+    
     resultsArea.innerHTML = `
         <div class="results-container">
             <div class="results-header">
                 <h3>🎯 Catalog-Aware Extraction Results</h3>
-                <p>Facility: <strong>${data.locality.name}</strong> | Processed ${data.summary.totalFiles} files</p>
+                <p>Facility: <strong>${data.locality.name}</strong> | ${supplierText}</p>
                 <div class="results-stats">
                     <div class="stat-item">
                         <span class="stat-value">${data.summary.totalComponents}</span>
@@ -609,28 +746,22 @@ function renderPositionGroup(group) {
             </div>
             
             <div class="components-list">
-                ${(group.components || []).map(renderComponent).join('')}
+                ${(group.components || []).map((comp, idx) => renderComponent(comp, group.position_id, idx)).join('')}
             </div>
         </div>
     `;
 }
 
-function renderComponent(comp) {
+function renderComponent(comp, positionId, componentIndex) {
+    const hasMatch = comp.matched_product_id !== null && comp.matched_product_id !== undefined;
     const confidenceClass = comp.match_confidence >= 0.9 ? 'high' : 
                            comp.match_confidence >= 0.6 ? 'medium' : 'low';
     
-    const matchStatus = comp.matched_product_id 
-        ? `<div class="match-info">
-             <span class="match-badge ${confidenceClass}">
-               🎯 Matched to Product #${comp.matched_product_id}
-             </span>
-             <span class="confidence">${Math.round(comp.match_confidence * 100)}%</span>
-             <span class="match-reason">${comp.match_reason || ''}</span>
-           </div>`
-        : `<div class="match-info"><span class="no-match">❌ No catalog match</span></div>`;
+    const editId = `edit_${positionId}_${componentIndex}`;
+    const isEditing = false;
     
     return `
-        <div class="component-item">
+        <div class="component-item" id="comp_${positionId}_${componentIndex}">
             <div class="component-main">
                 <span class="component-type">${comp.type}</span>
                 <span class="component-desc">${comp.description}</span>
@@ -642,10 +773,223 @@ function renderComponent(comp) {
                     ${comp.quantity ? `<span class="quantity">×${comp.quantity} ${comp.unit || ''}</span>` : ''}
                     ${comp.mbl_kg ? `<span class="mbl">⚖️ ${comp.mbl_kg}kg</span>` : ''}
                 </div>
-                ${matchStatus}
+                ${hasMatch ? `
+                    <div class="match-info">
+                        <span class="match-badge ${confidenceClass}">
+                            🎯 Matched to Product #${comp.matched_product_id}
+                        </span>
+                        <span class="confidence">${Math.round(comp.match_confidence * 100)}%</span>
+                        <button class="btn-change" onclick="editComponent(${positionId}, ${componentIndex})">Change</button>
+                    </div>
+                ` : `
+                    <div class="match-info">
+                        <span class="no-match">❌ No catalog match</span>
+                        <button class="btn-change active" onclick="editComponent(${positionId}, ${componentIndex})">Select Product</button>
+                    </div>
+                `}
+            </div>
+            <div id="${editId}" class="component-editor" style="display: none;">
+                <div class="editor-row">
+                    <label>Supplier:</label>
+                    <input 
+                        type="text" 
+                        class="supplier-search-input" 
+                        placeholder="Type 3+ chars to search..."
+                        oninput="searchSupplierForComponent(this.value, ${positionId}, ${componentIndex})"
+                    />
+                    <div class="supplier-dropdown" id="supplier_dropdown_${positionId}_${componentIndex}"></div>
+                </div>
+                <div class="editor-row" id="product_row_${positionId}_${componentIndex}" style="display: none;">
+                    <label>Product:</label>
+                    <input 
+                        type="text" 
+                        class="product-search-input" 
+                        placeholder="Type 3+ chars to search products..."
+                        oninput="searchProductForComponent(this.value, ${positionId}, ${componentIndex})"
+                    />
+                    <div class="product-dropdown" id="product_dropdown_${positionId}_${componentIndex}"></div>
+                </div>
+                <div class="editor-actions">
+                    <button class="btn-save" onclick="saveComponentEdit(${positionId}, ${componentIndex})">Save</button>
+                    <button class="btn-cancel" onclick="cancelComponentEdit(${positionId}, ${componentIndex})">Cancel</button>
+                </div>
             </div>
         </div>
     `;
+}
+
+let componentEditState = {};
+
+function editComponent(positionId, componentIndex) {
+    const editorId = `edit_${positionId}_${componentIndex}`;
+    const editor = document.getElementById(editorId);
+    
+    if (editor) {
+        editor.style.display = 'block';
+        componentEditState[`${positionId}_${componentIndex}`] = {
+            selectedSupplier: null,
+            selectedProduct: null
+        };
+    }
+}
+
+function searchSupplierForComponent(searchTerm, positionId, componentIndex) {
+    const dropdownId = `supplier_dropdown_${positionId}_${componentIndex}`;
+    const dropdown = document.getElementById(dropdownId);
+    
+    if (!dropdown) return;
+    
+    const suppliersToSearch = window.filteredSuppliers || allSuppliers;
+    
+    if (searchTerm.length < 3) {
+        dropdown.innerHTML = `<div class="dropdown-hint">Type at least 3 characters... (${suppliersToSearch.length} suppliers available)</div>`;
+        dropdown.style.display = 'block';
+        return;
+    }
+    
+    const term = searchTerm.toLowerCase();
+    const filtered = suppliersToSearch.filter(s => 
+        s.Name.toLowerCase().includes(term)
+    ).slice(0, 5);
+    
+    if (filtered.length === 0) {
+        dropdown.innerHTML = '<div class="dropdown-hint">No suppliers found</div>';
+        dropdown.style.display = 'block';
+        return;
+    }
+    
+    dropdown.innerHTML = filtered.map(s => `
+        <div class="dropdown-item" onclick="selectSupplierForComponent(${s.Id}, '${s.Name.replace(/'/g, "\\'")}', ${positionId}, ${componentIndex})">
+            <strong>${s.Name}</strong>
+            <span class="product-count">${s.productCount} products</span>
+        </div>
+    `).join('');
+    dropdown.style.display = 'block';
+}
+
+function selectSupplierForComponent(supplierId, supplierName, positionId, componentIndex) {
+    const key = `${positionId}_${componentIndex}`;
+    if (!componentEditState[key]) {
+        componentEditState[key] = {};
+    }
+    
+    componentEditState[key].selectedSupplier = { id: supplierId, name: supplierName };
+    
+    const supplierInput = document.querySelector(`#edit_${positionId}_${componentIndex} .supplier-search-input`);
+    const supplierDropdown = document.getElementById(`supplier_dropdown_${positionId}_${componentIndex}`);
+    const productRow = document.getElementById(`product_row_${positionId}_${componentIndex}`);
+    
+    if (supplierInput) supplierInput.value = supplierName;
+    if (supplierDropdown) supplierDropdown.style.display = 'none';
+    if (productRow) productRow.style.display = 'block';
+}
+
+function searchProductForComponent(searchTerm, positionId, componentIndex) {
+    const key = `${positionId}_${componentIndex}`;
+    const editState = componentEditState[key];
+    
+    if (!editState || !editState.selectedSupplier) {
+        return;
+    }
+    
+    const dropdownId = `product_dropdown_${positionId}_${componentIndex}`;
+    const dropdown = document.getElementById(dropdownId);
+    
+    if (!dropdown) return;
+    
+    if (searchTerm.length < 3) {
+        dropdown.innerHTML = '<div class="dropdown-hint">Type at least 3 characters...</div>';
+        dropdown.style.display = 'block';
+        return;
+    }
+    
+    const term = searchTerm.toLowerCase();
+    
+    const selectedSupplierId = editState.selectedSupplier.id;
+    const supplierData = allSuppliers.find(s => s.Id === selectedSupplierId);
+    const parentSupplierId = supplierData?.ParentSupplierId;
+    
+    const filtered = allProducts.filter(p => {
+        const matchesSupplier = p.supplierId === selectedSupplierId || 
+                               (parentSupplierId && p.supplierId === parentSupplierId);
+        const matchesSearch = p.description.toLowerCase().includes(term);
+        return matchesSupplier && matchesSearch;
+    }).slice(0, 5);
+    
+    if (filtered.length === 0) {
+        const msg = parentSupplierId 
+            ? 'No products found for this supplier or its parent' 
+            : 'No products found for this supplier';
+        dropdown.innerHTML = `<div class="dropdown-hint">${msg}</div>`;
+        dropdown.style.display = 'block';
+        return;
+    }
+    
+    dropdown.innerHTML = filtered.map(p => `
+        <div class="dropdown-item" onclick="selectProductForComponent(${p.id}, '${p.description.replace(/'/g, "\\'")}', ${positionId}, ${componentIndex})">
+            <strong>${p.description}</strong>
+            <div class="product-meta">
+                ${p.mbl ? `MBL: ${p.mbl}kg` : ''} ${p.internalNumber ? `| #${p.internalNumber}` : ''}
+            </div>
+        </div>
+    `).join('');
+    dropdown.style.display = 'block';
+}
+
+function selectProductForComponent(productId, productDescription, positionId, componentIndex) {
+    const key = `${positionId}_${componentIndex}`;
+    if (!componentEditState[key]) {
+        componentEditState[key] = {};
+    }
+    
+    componentEditState[key].selectedProduct = { id: productId, description: productDescription };
+    
+    const productInput = document.querySelector(`#edit_${positionId}_${componentIndex} .product-search-input`);
+    const productDropdown = document.getElementById(`product_dropdown_${positionId}_${componentIndex}`);
+    
+    if (productInput) productInput.value = productDescription;
+    if (productDropdown) productDropdown.style.display = 'none';
+}
+
+function saveComponentEdit(positionId, componentIndex) {
+    const key = `${positionId}_${componentIndex}`;
+    const editState = componentEditState[key];
+    
+    if (!editState || !editState.selectedProduct) {
+        showError('Please select both supplier and product');
+        return;
+    }
+    
+    if (!extractedData) return;
+    
+    extractedData.results.forEach(result => {
+        if (result.catalogExtraction && result.catalogExtraction.data) {
+            result.catalogExtraction.data.position_groups.forEach(group => {
+                if (group.position_id === positionId && group.components[componentIndex]) {
+                    group.components[componentIndex].matched_product_id = editState.selectedProduct.id;
+                    group.components[componentIndex].match_confidence = 1.0;
+                    group.components[componentIndex].match_reason = 'Manually selected';
+                }
+            });
+        }
+    });
+    
+    const editor = document.getElementById(`edit_${positionId}_${componentIndex}`);
+    if (editor) editor.style.display = 'none';
+    
+    delete componentEditState[key];
+    
+    displayResults(extractedData);
+    
+    showNotification('✅ Product updated successfully', 'success');
+}
+
+function cancelComponentEdit(positionId, componentIndex) {
+    const editor = document.getElementById(`edit_${positionId}_${componentIndex}`);
+    if (editor) editor.style.display = 'none';
+    
+    const key = `${positionId}_${componentIndex}`;
+    delete componentEditState[key];
 }
 
 async function submitToDatabase() {
@@ -718,6 +1062,8 @@ function clearAll() {
     currentLocality = null;
     currentMooring = null;
     currentPositions = [];
+    selectedSupplier = null;
+    componentEditState = {};
     
     if (selectedFiles) selectedFiles.innerHTML = '';
     if (fileList) fileList.style.display = 'none';
@@ -759,6 +1105,17 @@ window.updatePositionMapping = updatePositionMapping;
 window.savePositionMappings = savePositionMappings;
 window.backToUpload = backToUpload;
 window.backToLocality = backToLocality;
+window.backToMapping = backToMapping;
+window.searchSuppliers = searchSuppliers;
+window.selectSupplier = selectSupplier;
+window.skipSupplierSelection = skipSupplierSelection;
 window.proceedToProcessing = proceedToProcessing;
 window.submitToDatabase = submitToDatabase;
 window.exportResults = exportResults;
+window.editComponent = editComponent;
+window.searchSupplierForComponent = searchSupplierForComponent;
+window.selectSupplierForComponent = selectSupplierForComponent;
+window.searchProductForComponent = searchProductForComponent;
+window.selectProductForComponent = selectProductForComponent;
+window.saveComponentEdit = saveComponentEdit;
+window.cancelComponentEdit = cancelComponentEdit;

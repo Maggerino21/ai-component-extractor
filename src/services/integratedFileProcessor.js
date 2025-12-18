@@ -35,8 +35,14 @@ class IntegratedFileProcessor {
         }
     }
 
-    async processFiles(filePaths, positionMappings = []) {
+    async processFiles(filePaths, positionMappings = [], preferredSupplierId = null) {
         await this.initialize();
+
+        if (preferredSupplierId) {
+            const supplierCatalog = await this.db.getProductCatalog(preferredSupplierId);
+            this.extractor.setProductCatalog(supplierCatalog);
+            logger.info(`Set catalog to preferred supplier ID ${preferredSupplierId}: ${supplierCatalog.length} products`);
+        }
 
         const results = [];
         
@@ -108,6 +114,16 @@ class IntegratedFileProcessor {
     async getPositions(mooringId) {
         await this.initialize();
         return await this.db.getPositions(mooringId);
+    }
+
+    async getSuppliers() {
+        await this.initialize();
+        return await this.db.getSuppliers();
+    }
+
+    async getProductCatalog(supplierId = null) {
+        await this.initialize();
+        return await this.db.getProductCatalog(supplierId);
     }
 
     async insertComponents(componentsData) {

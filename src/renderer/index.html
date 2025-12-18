@@ -9,19 +9,20 @@
 </head>
 <body>
     <div class="container">
-        <!-- Header -->
         <div class="header">
             <h1>🐟 Aquaculture AI Component Extractor</h1>
             <p>AI-powered component extraction for fish farming facilities</p>
         </div>
 
-        <!-- Step Indicators -->
         <div class="step-indicators">
             <div class="step-indicator" data-step="upload">
                 📁 Upload Files
             </div>
             <div class="step-indicator" data-step="mapping">
                 🗺️ Position Mapping
+            </div>
+            <div class="step-indicator" data-step="supplier">
+                🏭 Select Supplier
             </div>
             <div class="step-indicator" data-step="processing">
                 🤖 AI Processing
@@ -31,7 +32,6 @@
             </div>
         </div>
 
-        <!-- Upload Area -->
         <div id="uploadArea" class="content-area">
             <div class="upload-area" id="uploadDropZone">
                 <div class="upload-icon">📁</div>
@@ -53,19 +53,50 @@
             </div>
         </div>
 
-        <!-- Position Mapping Area -->
         <div id="mappingArea" class="content-area">
             <div class="position-mapper">
                 <div class="mapper-header">
                     <h3>Position Mapping Setup</h3>
                     <p>Configure your facility and map document references to internal positions</p>
                 </div>
-                
-                <!-- Position mapping content will be injected here by JavaScript -->
             </div>
         </div>
 
-        <!-- Processing Area -->
+        <div id="supplierArea" class="content-area">
+            <div class="supplier-selector">
+                <div class="supplier-header">
+                    <h3>🏭 Select Primary Supplier (Optional)</h3>
+                    <p>Facility: <strong id="supplierFacilityName"></strong></p>
+                    <p>These are product catalog suppliers. Select one to focus AI extraction, or skip to use full catalog.</p>
+                </div>
+                
+                <div class="supplier-search">
+                    <input 
+                        type="text" 
+                        id="supplierSearchInput" 
+                        placeholder="🔍 Type at least 3 characters to search suppliers..." 
+                        oninput="searchSuppliers(this.value)"
+                        autofocus
+                    />
+                    <div id="supplierDropdown" class="dropdown-results"></div>
+                </div>
+                
+                <div id="selectedSupplierDisplay" class="selected-supplier" style="display: none;">
+                    <h4>Selected Supplier</h4>
+                    <div class="supplier-card selected">
+                        <h5 id="selectedSupplierName"></h5>
+                        <p id="selectedSupplierDetails"></p>
+                    </div>
+                </div>
+                
+                <div class="supplier-actions">
+                    <button onclick="skipSupplierSelection()" class="btn-primary">⏭️ Skip - Use Full Catalog</button>
+                    <button onclick="proceedToProcessing()" id="proceedToProcessingBtn" class="btn-secondary" disabled>Continue with Selected Supplier</button>
+                    <button onclick="backToMapping()" class="btn-secondary">⬅️ Back to Position Mapping</button>
+                </div>
+            </div>
+        </div>
+
         <div id="processingArea" class="content-area">
             <div class="processing-status">
                 <h3>🔄 Processing Files with AI</h3>
@@ -95,12 +126,9 @@
             </div>
         </div>
 
-        <!-- Results Area -->
         <div id="resultsArea" class="content-area">
-            <!-- Results content will be injected here by JavaScript -->
         </div>
 
-        <!-- Footer -->
         <div class="app-footer">
             <div class="status-indicator">
                 <span id="appStatus">Ready</span>
@@ -111,7 +139,6 @@
         </div>
     </div>
 
-    <!-- Load the renderer script -->
     <script src="renderer.js"></script>
 </body>
 </html>

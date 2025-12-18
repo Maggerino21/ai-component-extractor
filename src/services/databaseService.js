@@ -85,6 +85,14 @@ class DatabaseService {
             `;
 
             logger.info(`Loaded ${result.recordset.length} localities`);
+            
+            if (result.recordset.length > 0) {
+                const firstLocality = result.recordset[0];
+                logger.info(`DEBUG - First locality raw:`, firstLocality);
+                logger.info(`DEBUG - First locality keys:`, Object.keys(firstLocality));
+                logger.info(`DEBUG - CustomerId field:`, firstLocality.CustomerId);
+            }
+            
             return result.recordset;
         } catch (error) {
             logger.error('Failed to load localities', error);
@@ -249,13 +257,25 @@ class DatabaseService {
                     Name,
                     OrganizationNumber,
                     ContactPerson,
-                    IsActive
+                    IsActive,
+                    CustomerId,
+                    ParentSupplierId,
+                    RefEntityName
                 FROM Suppliers
                 WHERE IsDeleted = 0 AND IsActive = 1
                 ORDER BY Name
             `;
 
             logger.info(`Loaded ${result.recordset.length} suppliers`);
+            
+            if (result.recordset.length > 0) {
+                const productSuppliers = result.recordset.filter(s => s.RefEntityName === 'ArtiklerLeverandors');
+                logger.info(`DEBUG - Product catalog suppliers (ArtiklerLeverandors): ${productSuppliers.length}`);
+                if (productSuppliers.length > 0) {
+                    logger.info(`DEBUG - Sample:`, productSuppliers.slice(0, 3).map(s => `${s.Name} (ID: ${s.Id})`));
+                }
+            }
+            
             return result.recordset;
         } catch (error) {
             logger.error('Failed to load suppliers', error);
@@ -270,7 +290,7 @@ class DatabaseService {
             const result = await this.pool.request()
                 .input('supplierName', sql.NVarChar, `%${supplierName}%`)
                 .query`
-                    SELECT Id, Name
+                    SELECT Id, Name, CustomerId
                     FROM Suppliers
                     WHERE Name LIKE @supplierName
                       AND IsDeleted = 0

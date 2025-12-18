@@ -188,8 +188,11 @@ for (const { chunk, chunkExtractedData } of allChunkResults) {
     async aiExtractBatchWithCatalog(allPositionsText, catalogSubset, positionRefs) {
         try {
             this.aiCallCount++;
+            logger.info(`DEBUG: catalogSubset size BEFORE slice: ${catalogSubset.length} products`);
+            logger.info(`DEBUG: First 10 products:`, catalogSubset.slice(0, 10).map(p => p.description));
+            logger.info(`DEBUG: Searching for Sjakkel in subset:`, catalogSubset.filter(p => p.description.toLowerCase().includes('sjakkel')).map(p => p.description));
             
-            const catalogFormatted = catalogSubset.slice(0, 50).map(p => ({
+            const catalogFormatted = catalogSubset.slice(0, 200).map(p => ({
                 id: p.id,
                 description: p.description,
                 supplier: p.supplier,
@@ -215,12 +218,26 @@ ${JSON.stringify(catalogFormatted, null, 2)}
    - sequence is just the order (1,2,3), quantity is the amount
 5. Return data grouped by position reference
 
-**MATCHING PRIORITY:**
-1. Exact: Same description + same supplier = confidence 0.95-1.0
-2. Close: Similar description + same supplier = confidence 0.80-0.94
-3. Fuzzy: Partial match + same supplier = confidence 0.60-0.79
-4. NO MATCH: If confidence < 0.60, set matched_product_id to null (NOT 6000!)
-   - Do NOT default to a generic product ID
+**MATCHING PRIORITY - SEMANTIC UNDERSTANDING REQUIRED:**
+1. HIGH CONFIDENCE (0.90-1.0): ALL of these must match:
+   - Component type matches (anchor=anchor, shackle=shackle, chain=chain)
+   - KEY SPECS EXACT (weight in kg, diameter in mm, length in m, MBL)
+   - Description semantically similar (ignore extra words like "MBL", "forankring", "galv")
+   - Examples of GOOD matches:
+     * "Softanker 1700 kg" → "Anker Soft Hold 1700 kg" (same weight, same type)
+     * "Sjakkel 90T" → "Sjakkel MBL 90T forankring 852" (same capacity, same type)
+     * "Kjetting 30mm" → "Kjetting stolpeløs 30mm" (same diameter, same type)
+
+2. MEDIUM CONFIDENCE (0.60-0.89): Most match but specs slightly different:
+   - Component type matches
+   - Specs within 10% (1650kg could match 1700kg)
+   - Description reasonably similar
+
+3. NO MATCH (set to null): ANY of these is wrong:
+   - Different component type (anchor vs shackle)
+   - KEY SPECS DIFFER (1700kg ≠ 1500kg, 30mm ≠ 34mm)
+   - Description completely different
+   - **CRITICAL: Do NOT match products with different weights, sizes, or capacities!**
    - Better to have null than wrong match
 
 **OUTPUT FORMAT (JSON only, no markdown):**
