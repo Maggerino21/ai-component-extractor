@@ -757,6 +757,14 @@ function renderComponent(comp, positionId, componentIndex) {
     const confidenceClass = comp.match_confidence >= 0.9 ? 'high' : 
                            comp.match_confidence >= 0.6 ? 'medium' : 'low';
     
+    let displaySupplier = null;
+    if (hasMatch && allProducts) {
+        const matchedProduct = allProducts.find(p => p.id === comp.matched_product_id);
+        if (matchedProduct) {
+            displaySupplier = matchedProduct.supplier;
+        }
+    }
+    
     const editId = `edit_${positionId}_${componentIndex}`;
     const isEditing = false;
     
@@ -768,7 +776,7 @@ function renderComponent(comp, positionId, componentIndex) {
             </div>
             <div class="component-details">
                 <div class="component-meta">
-                    ${comp.manufacturer ? `<span class="manufacturer">🏭 ${comp.manufacturer}</span>` : ''}
+                    ${displaySupplier ? `<span class="manufacturer">🏭 ${displaySupplier}</span>` : ''}
                     ${comp.tracking_number ? `<span class="tracking">📋 ${comp.tracking_number}</span>` : ''}
                     ${comp.quantity ? `<span class="quantity">×${comp.quantity} ${comp.unit || ''}</span>` : ''}
                     ${comp.mbl_kg ? `<span class="mbl">⚖️ ${comp.mbl_kg}kg</span>` : ''}
