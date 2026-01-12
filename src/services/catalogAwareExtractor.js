@@ -86,41 +86,41 @@ class CatalogAwareExtractor {
         const allPositionGroups = [];
         
         const chunkPromises = chunks.map(async (chunk) => {
-    const chunkPositionsText = chunk.map(positionRef => {
-        const componentRows = grouped[positionRef];
-        const componentsText = this.formatComponentsForAI(componentRows);
-        return `POSITION: ${positionRef}\n${componentsText}\n`;
-    }).join('\n---\n\n');
-    
-    const relevantCatalog = this.getRelevantCatalog(chunkPositionsText);
-    
-    const chunkExtractedData = await this.aiExtractBatchWithCatalog(
-        chunkPositionsText,
-        relevantCatalog,
-        chunk
-    );
-    
-    return { chunk, chunkExtractedData };
-});
-
-const allChunkResults = await Promise.all(chunkPromises);
-
-for (const { chunk, chunkExtractedData } of allChunkResults) {
-    for (const [positionRef, extractedComponents] of Object.entries(chunkExtractedData)) {
-        const mapping = positionMappings.find(m => 
-            m.documentReference.toLowerCase() === positionRef.toLowerCase()
-        );
-        
-        allPositionGroups.push({
-            document_reference: positionRef,
-            internal_position: mapping ? mapping.internalPosition : null,
-            position_id: mapping ? mapping.positionId : null,
-            mapping_found: !!mapping,
-            sheet_source: sheetName,
-            components: extractedComponents
+            const chunkPositionsText = chunk.map(positionRef => {
+                const componentRows = grouped[positionRef];
+                const componentsText = this.formatComponentsForAI(componentRows);
+                return `POSITION: ${positionRef}\n${componentsText}\n`;
+            }).join('\n---\n\n');
+            
+            const relevantCatalog = this.getRelevantCatalog(chunkPositionsText);
+            
+            const chunkExtractedData = await this.aiExtractBatchWithCatalog(
+                chunkPositionsText,
+                relevantCatalog,
+                chunk
+            );
+            
+            return { chunk, chunkExtractedData };
         });
-    }
-}
+
+        const allChunkResults = await Promise.all(chunkPromises);
+
+        for (const { chunk, chunkExtractedData } of allChunkResults) {
+            for (const [positionRef, extractedComponents] of Object.entries(chunkExtractedData)) {
+                const mapping = positionMappings.find(m => 
+                    m.documentReference.toLowerCase() === positionRef.toLowerCase()
+                );
+                
+                allPositionGroups.push({
+                    document_reference: positionRef,
+                    internal_position: mapping ? mapping.internalPosition : null,
+                    position_id: mapping ? mapping.positionId : null,
+                    mapping_found: !!mapping,
+                    sheet_source: sheetName,
+                    components: extractedComponents
+                });
+            }
+        }
         
         return allPositionGroups;
     }
@@ -141,15 +141,43 @@ for (const { chunk, chunkExtractedData } of allChunkResults) {
 
     extractPosition(row) {
         const keys = Object.keys(row);
-        const positionKeys = keys.filter(k => 
-            k.toLowerCase().includes('navn') || 
-            k.toLowerCase().includes('nummer') ||
-            k.toLowerCase().includes('posisjon')
-        );
+        
+        const positionKeys = keys.filter(k => {
+            const kLower = k.toLowerCase();
+            return kLower.includes('navn') || 
+                   kLower.includes('nummer') ||
+                   kLower.includes('posisjon') ||
+                   kLower.includes('position') ||
+                   kLower.includes('line') ||
+                   kLower.includes('linje');
+        });
 
         if (positionKeys.length > 0) {
             const value = row[positionKeys[0]];
-            return value ? value.toString().trim() : null;
+            if (!value) return null;
+            
+            const valueStr = value.toString().trim();
+            
+            if (!valueStr) return null;
+            
+            const positionPattern = /^[A-Z]\d{2}[A-Z]?$/i;
+            if (positionPattern.test(valueStr)) {
+                return valueStr;
+            }
+            
+            return valueStr;
+        }
+
+        for (const key of keys) {
+            const value = row[key];
+            if (!value) continue;
+            
+            const valueStr = value.toString().trim();
+            const positionPattern = /^[A-Z]\d{2}[A-Z]?$/i;
+            
+            if (positionPattern.test(valueStr)) {
+                return valueStr;
+            }
         }
 
         return null;
@@ -157,8 +185,66 @@ for (const { chunk, chunkExtractedData } of allChunkResults) {
 
     isHeaderRow(row) {
         const values = Object.values(row).join(' ').toLowerCase();
+        const allValues = Object.values(row);
+        
         const headerKeywords = ['type', 'posisjon', 'antall', 'fortøyningsline', 'kommentar'];
-        return headerKeywords.some(k => values.startsWith(k)) && values.length < 50;
+        if (headerKeywords.some(k => values.startsWith(k)) && values.length < 50) {
+            return true;
+        }
+        
+        const positionTypePatterns = [
+            /^koblingspunkt\s+type\s*[\d.]+$/i,
+            /^hjørne\s+type\s*[\d.]+$/i,
+            /^fortøyningslinje\s+type\s*[\d.]+$/i,
+            /^rammelinje\s+type\s*[\d.]+$/i,
+            /^type\s+[\d.]+\s+(hjørne|koblingspunkt|ramme)/i,
+            /^fortøyningslinje\s+[\d.]+\s+(anker|bolt|anchor)$/i,
+            /^koblingspunkt\s+[\d.]+\s+(bøye|buoy)$/i,
+            /^rammelinje\s+[\d.]+\s+(tau|rope)$/i,
+            /^bridle\s+[\d.]+\s+(tau|rope)$/i,
+            /^(fortøyningslinje|koblingspunkt|hjørne|rammelinje|bridle)\s+[\d.]+\s*$/i
+        ];
+        
+        if (allValues.some(val => 
+            positionTypePatterns.some(pattern => pattern.test(val.toString().trim()))
+        )) {
+            return true;
+        }
+        
+        const emptyOrHeaderOnly = allValues.every(v => {
+            const str = v.toString().trim().toLowerCase();
+            return str === '' || headerKeywords.some(k => str === k);
+        });
+        
+        if (emptyOrHeaderOnly) {
+            return true;
+        }
+        
+        const hasSpecifications = allValues.some(v => {
+            const str = v.toString().trim();
+            return /\d+\s*mm/.test(str) || 
+                   /\d+[.,]\d*\s*m(?!m)/.test(str) || 
+                   /\d+[.,]?\d*\s*kg/.test(str) ||
+                   /\d+\s*t(?!ype)(?!au)/i.test(str) ||
+                   /[A-Z]{2,}-[A-Z0-9]+/.test(str) ||
+                   /^\d{5,}$/.test(str);
+        });
+        
+        const hasOnlyGenericInfo = allValues.every(v => {
+            const str = v.toString().trim().toLowerCase();
+            return str === '' || 
+                   str.length < 3 ||
+                   /^(fortøyningslinje|koblingspunkt|hjørne|rammelinje|bridle)/.test(str) ||
+                   /^(anker|bolt|bøye|tau|kjetting|sjakkel|rope|chain|anchor|buoy|shackle)$/.test(str) ||
+                   /^type\s*[\d.]+$/.test(str) ||
+                   /^[\d.]+$/.test(str);
+        });
+        
+        if (hasOnlyGenericInfo && !hasSpecifications) {
+            return true;
+        }
+        
+        return false;
     }
 
     formatComponentsForAI(rows) {
@@ -207,6 +293,18 @@ ${allPositionsText}
 **PRODUCT CATALOG (${catalogFormatted.length} products):**
 ${JSON.stringify(catalogFormatted, null, 2)}
 
+**POSITION TYPE RULES - CRITICAL:**
+These rules are MANDATORY and override everything else:
+1. **Rammelinje (R-prefix, 701-799)**: NEVER contains anchors or bolts. Typical components: ropes, shackles, chains, swivels
+2. **Fortøyningslinje (H-prefix, 101-199)**: Contains anchors, chains, shackles, ropes in that order
+3. **Koblingspunkt/Hjørne (K-prefix, 301-399)**: Buoys, shackles, chains, ropes - NO anchors
+4. **Bridles (S-prefix, 501-599)**: Ropes, shackles, chains - NO anchors
+
+If you see an "anker" or "anchor" in a position that CANNOT have anchors (R, K, S prefix), it's likely:
+- Misidentified component (probably a rope or chain)
+- Part of a description (ignore it)
+- Document error (mark as low confidence)
+
 **CRITICAL RULES:**
 1. Manufacturer appears ONLY on sequence 1 per position - all other components inherit it
 2. Match to catalog using description + supplier
@@ -217,12 +315,14 @@ ${JSON.stringify(catalogFormatted, null, 2)}
    - DO NOT use the sequence number as quantity
    - sequence is just the order (1,2,3), quantity is the amount
 5. Return data grouped by position reference
+6. **CHECK POSITION TYPE** before determining component type
 
 **MATCHING PRIORITY - SEMANTIC UNDERSTANDING REQUIRED:**
 1. HIGH CONFIDENCE (0.90-1.0): ALL of these must match:
    - Component type matches (anchor=anchor, shackle=shackle, chain=chain)
    - KEY SPECS EXACT (weight in kg, diameter in mm, length in m, MBL)
    - Description semantically similar (ignore extra words like "MBL", "forankring", "galv")
+   - **Position type allows this component** (e.g., no anchors in rammelinje)
    - Examples of GOOD matches:
      * "Softanker 1700 kg" → "Anker Soft Hold 1700 kg" (same weight, same type)
      * "Sjakkel 90T" → "Sjakkel MBL 90T forankring 852" (same capacity, same type)
@@ -232,11 +332,13 @@ ${JSON.stringify(catalogFormatted, null, 2)}
    - Component type matches
    - Specs within 10% (1650kg could match 1700kg)
    - Description reasonably similar
+   - Position type allows this component
 
 3. NO MATCH (set to null): ANY of these is wrong:
    - Different component type (anchor vs shackle)
    - KEY SPECS DIFFER (1700kg ≠ 1500kg, 30mm ≠ 34mm)
    - Description completely different
+   - **Component type NOT allowed in this position type**
    - **CRITICAL: Do NOT match products with different weights, sizes, or capacities!**
    - Better to have null than wrong match
 
